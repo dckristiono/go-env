@@ -27,3 +27,4 @@ go.work
 .vscode/
 *.swp
 *.swo
+coverage.txt
