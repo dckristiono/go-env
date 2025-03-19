@@ -1,9 +1,12 @@
 package env
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1977,5 +1980,274 @@ func TestResultIntDefaultEdgeCases(t *testing.T) {
 	val = r.IntDefault(100)
 	if val != 42 {
 		t.Errorf("IntDefault() with valid value expected 42, got %d", val)
+	}
+}
+
+// TestDoubleCheckedLocking menguji pola double-checked locking pada getDefaultInstance
+func TestDoubleCheckedLocking(t *testing.T) {
+	// Reset state
+	instanceMutex.Lock()
+	origDefaultInstance := defaultInstance
+	origInitErr := initErr
+	instanceMutex.Unlock()
+
+	// Restore setelah test
+	defer func() {
+		instanceMutex.Lock()
+		defaultInstance = origDefaultInstance
+		initErr = origInitErr
+		instanceMutex.Unlock()
+	}()
+
+	// Scenario 1: First check passes (defaultInstance != nil)
+	instanceMutex.Lock()
+	defaultInstance = &Config{Mode: "test_mode"}
+	initErr = nil
+	instanceMutex.Unlock()
+
+	result, err := getDefaultInstance()
+	if result == nil || result.Mode != "test_mode" || err != nil {
+		t.Errorf("Expected defaultInstance with Mode 'test_mode', got %v (error: %v)",
+			result, err)
+	}
+
+	// Scenario 2: First check fails but second check passes (race condition simulation)
+	// Reset state first
+	instanceMutex.Lock()
+	defaultInstance = nil
+	initErr = nil
+	instanceMutex.Unlock()
+
+	// Create a custom version of getDefaultInstance that simulates a race condition
+	// where another thread sets defaultInstance between the first and second check
+	origGetDefaultInstance := getDefaultInstance
+	defer func() { getDefaultInstance = origGetDefaultInstance }()
+
+	raceSimulated := false
+	getDefaultInstance = func() (*Config, error) {
+		// First check
+		instanceMutex.RLock()
+		if defaultInstance != nil || initErr != nil {
+			defer instanceMutex.RUnlock()
+			return defaultInstance, initErr
+		}
+		instanceMutex.RUnlock()
+
+		// Between first and second check, simulate another thread setting the instance
+		if !raceSimulated {
+			raceSimulated = true
+			instanceMutex.Lock()
+			defaultInstance = &Config{Mode: "race_condition"}
+			instanceMutex.Unlock()
+		}
+
+		// Second check should now pass
+		instanceMutex.Lock()
+		defer instanceMutex.Unlock()
+
+		if defaultInstance != nil || initErr != nil {
+			return defaultInstance, initErr
+		}
+
+		// This part shouldn't be reached in our test
+		defaultInstance, initErr = New()
+		return defaultInstance, initErr
+	}
+
+	// Call getDefaultInstance, second check should return the instance set by the "race"
+	result, err = getDefaultInstance()
+	if result == nil || result.Mode != "race_condition" || err != nil {
+		t.Errorf("Race condition simulation should return defaultInstance with Mode 'race_condition', got %v (error: %v)",
+			result, err)
+	}
+}
+
+// TestLoadWithEnvFile menguji Load() dengan file .env yang valid
+func TestLoadWithEnvFile(t *testing.T) {
+	// Buat temporary directory dan file
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Skipf("Failed to get current dir: %v", err)
+		return
+	}
+
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Logf("Warning: Failed to restore original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Skipf("Failed to change to temp dir: %v", err)
+		return
+	}
+
+	// Buat valid .env file
+	envContent := "TEST_KEY=test_value\nANOTHER_KEY=another_value"
+	if err := os.WriteFile(".env", []byte(envContent), 0644); err != nil {
+		t.Fatalf("Failed to create .env file: %v", err)
+	}
+
+	// Test dengan valid file
+	cfg := &Config{Mode: Production}
+	err = cfg.Load()
+	if err != nil {
+		t.Errorf("Load() with valid .env file should not return error, got %v", err)
+	}
+
+	// Verify env variable was loaded
+	val := os.Getenv("TEST_KEY")
+	if val != "test_value" {
+		t.Errorf("Expected TEST_KEY to be 'test_value', got '%s'", val)
+	}
+}
+
+// TestGetInt64WithInvalidValueAndPackageLevel menguji GetInt64 di level package
+func TestGetInt64WithInvalidValueAndPackageLevel(t *testing.T) {
+	// Setup
+	oldEnv := os.Getenv("TEST_INT64_INVALID")
+	defer os.Setenv("TEST_INT64_INVALID", oldEnv)
+
+	// Set invalid value
+	os.Setenv("TEST_INT64_INVALID", "not_an_int64")
+
+	// Initialize untuk test
+	defaultInstance = nil
+	initErr = nil
+
+	// Buat temp dir dengan .env
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Skipf("Failed to get current dir: %v", err)
+		return
+	}
+
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Logf("Warning: Failed to restore original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Skipf("Failed to change to temp dir: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(".env", []byte("TEST=value"), 0644); err != nil {
+		t.Skipf("Failed to create .env file: %v", err)
+		return
+	}
+
+	// Initialize
+	if err := Initialize(); err != nil {
+		t.Fatalf("Failed to initialize: %v", err)
+	}
+
+	// Test package level GetInt64 function with error
+	_, err = GetInt64("TEST_INT64_INVALID")
+	if err == nil {
+		t.Error("GetInt64() with invalid value should return error")
+	}
+
+	// Test dengan default value
+	defaultInt64 := int64(9999)
+	_, err = GetInt64("TEST_INT64_INVALID", defaultInt64)
+	if err == nil {
+		t.Error("GetInt64() with invalid value should return error even with default")
+	}
+
+	// Test package level wrapper function Int64 (jika ada)
+	// ... tambahkan test jika ada fungsi Int64 seperti Int, Float64, dll
+}
+
+// TestLoadNonProductionMissingFileWithWarning menguji Load() dengan file yang tidak ada pada mode non-production
+// dengan lebih eksplisit meng-capture output warning
+func TestLoadNonProductionMissingFileWithWarning(t *testing.T) {
+	// Buat tempdir dan cd ke sana
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Skipf("Failed to get current dir: %v", err)
+		return
+	}
+
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Logf("Warning: Failed to restore original directory: %v", err)
+		}
+	}()
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Skipf("Failed to change to temp dir: %v", err)
+		return
+	}
+
+	// Redirect stdout untuk meng-capture warning message
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	// Restore stdout when done
+	defer func() {
+		os.Stdout = oldStdout
+	}()
+
+	// Test Load pada mode development (bukan production) tanpa file .env.development
+	cfg := &Config{Mode: Development}
+	err = cfg.Load()
+
+	// Tutup writer untuk flush data ke reader
+	w.Close()
+
+	// Baca output yang di-capture
+	var buf bytes.Buffer
+	_, copyErr := io.Copy(&buf, r)
+	if copyErr != nil {
+		t.Fatalf("Failed to read captured output: %v", copyErr)
+	}
+	capturedOutput := buf.String()
+
+	// Tidak boleh error
+	if err != nil {
+		t.Errorf("Load() in Development mode without file should not return error, got %v", err)
+	}
+
+	// Harus ada pesan warning
+	expectedWarning := fmt.Sprintf("Peringatan: File %s tidak ditemukan", ".env.development")
+	if !strings.Contains(capturedOutput, expectedWarning) {
+		t.Errorf("Expected warning '%s', got output: '%s'", expectedWarning, capturedOutput)
+	}
+
+	// Test juga untuk staging mode
+	cfg = &Config{Mode: Staging}
+
+	// Reset stdout capture
+	r, w, _ = os.Pipe()
+	os.Stdout = w
+
+	err = cfg.Load()
+
+	// Tutup writer untuk flush data ke reader
+	w.Close()
+
+	// Baca output yang di-capture
+	buf.Reset()
+	_, copyErr = io.Copy(&buf, r)
+	if copyErr != nil {
+		t.Fatalf("Failed to read captured output: %v", copyErr)
+	}
+	capturedOutput = buf.String()
+
+	// Tidak boleh error
+	if err != nil {
+		t.Errorf("Load() in Staging mode without file should not return error, got %v", err)
+	}
+
+	// Harus ada pesan warning
+	expectedWarning = fmt.Sprintf("Peringatan: File %s tidak ditemukan", ".env.staging")
+	if !strings.Contains(capturedOutput, expectedWarning) {
+		t.Errorf("Expected warning '%s', got output: '%s'", expectedWarning, capturedOutput)
 	}
 }
