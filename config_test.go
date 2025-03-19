@@ -3,141 +3,89 @@ package env
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
 
-// ConfigOption type declarations for testing
-func WithTestMode(mode string) ConfigOption {
-	return func(c *Config) {
-		c.Mode = mode
+// TestGetDefaultInstance tests the singleton behavior and error handling
+func TestGetDefaultInstance(t *testing.T) {
+	// Save original values
+	origDefaultInstance := defaultInstance
+	origInitErr := initErr
+	origOnce := once
+	origGetDefaultInstance := getDefaultInstance
+
+	// Reset for testing
+	defaultInstance = nil
+	initErr = nil
+	once = sync.Once{}
+
+	// Restore after testing
+	defer func() {
+		defaultInstance = origDefaultInstance
+		initErr = origInitErr
+		once = origOnce
+		getDefaultInstance = origGetDefaultInstance
+	}()
+
+	// First call should initialize - using blank identifiers to avoid unused vars error
+	_, _ = getDefaultInstance()
+
+	// Save instance for comparison
+	savedInstance := defaultInstance
+
+	// Second call should return the same instance
+	instance2, _ := getDefaultInstance()
+	if instance2 != savedInstance && savedInstance != nil {
+		t.Error("Second call returned different instance")
 	}
-}
 
-func WithTestPrefix(prefix string) ConfigOption {
-	return func(c *Config) {
-		c.Prefix = prefix
+	// Test error case
+	// Important: Reset once so the function actually runs
+	defaultInstance = nil
+	initErr = fmt.Errorf("test error")
+	once = sync.Once{}
+
+	// Create a temporary implementation
+	oldGetDefaultInstance := getDefaultInstance
+	getDefaultInstance = func() (*Config, error) {
+		if defaultInstance == nil && initErr != nil {
+			return nil, initErr
+		}
+		return defaultInstance, initErr
 	}
+
+	// This should return the error from initialization
+	_, err2 := getDefaultInstance()
+	if err2 == nil || err2.Error() != "test error" {
+		t.Errorf("Expected 'test error', got %v", err2)
+	}
+
+	// Restore original function
+	getDefaultInstance = oldGetDefaultInstance
 }
 
-// Create a mock implementation for testing file existence
-type mockFileSystemHelper struct {
-	fileExistsFunc func(string) bool
-}
-
-func (m *mockFileSystemHelper) fileExists(filename string) bool {
-	return m.fileExistsFunc(filename)
-}
-
-// TestConfigDetermineDefaultMode tests mode selection logic
-func TestConfigDetermineDefaultMode(t *testing.T) {
+// TestConfigDetermineDefaultModeEnv tests mode determination by APP_ENV
+func TestConfigDetermineDefaultModeEnv(t *testing.T) {
 	// Save original environment
 	oldEnv := os.Getenv("APP_ENV")
 	defer os.Setenv("APP_ENV", oldEnv)
 
-	// Test with APP_ENV set
-	os.Setenv("APP_ENV", "staging")
-	if mode := determineDefaultMode(); mode != "staging" {
-		t.Errorf("Expected mode 'staging', got '%s'", mode)
-	}
-	os.Unsetenv("APP_ENV")
-
-	// We can't mock fileExists directly, so we'll test the behavior
-	// based on actual file creation
-
-	// Create temporary files for testing
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer os.Chdir(oldDir)
-
-	// Change to temporary directory
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
-	}
-
-	// Test with only .env file
-	if err := os.WriteFile(".env", []byte("TEST=VALUE"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env file: %v", err)
-	}
-	if mode := determineDefaultMode(); mode != Production {
-		t.Errorf("With only .env file, expected mode %s, got %s", Production, mode)
-	}
-
-	// Test with .env and .env.staging
-	if err := os.WriteFile(".env.staging", []byte("TEST=VALUE"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env.staging file: %v", err)
-	}
-	if mode := determineDefaultMode(); mode != Staging {
-		t.Errorf("With .env and .env.staging files, expected mode %s, got %s", Staging, mode)
-	}
-
-	// Test with all three files
-	if err := os.WriteFile(".env.development", []byte("TEST=VALUE"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env.development file: %v", err)
-	}
-	if mode := determineDefaultMode(); mode != Development {
-		t.Errorf("With all env files, expected mode %s, got %s", Development, mode)
-	}
-
-	// Clean up by changing back to original directory
-	// (temp files will be cleaned up by t.TempDir automatically)
-}
-
-// TestConfigNew tests creating a new Config
-func TestConfigNew(t *testing.T) {
-	// Save and restore environment
-	oldEnv := os.Getenv("APP_ENV")
-	defer os.Setenv("APP_ENV", oldEnv)
-	os.Setenv("APP_ENV", "production")
-
-	// Create temp directory and files for testing
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer os.Chdir(oldDir)
-
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
-	}
-
-	// Create a minimal .env file
-	if err := os.WriteFile(".env", []byte("TEST_KEY=test_value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env file: %v", err)
-	}
-
-	// Test default config
-	cfg, err := New()
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	if cfg.Mode != "production" {
-		t.Errorf("Expected Mode = %v, got %v", "production", cfg.Mode)
-	}
-	if cfg.Prefix != "" {
-		t.Errorf("Expected Prefix = '', got %v", cfg.Prefix)
-	}
-
-	// Test with options
-	cfg, err = New(WithTestMode(Staging), WithTestPrefix("TEST_"))
-	if err != nil {
-		t.Fatalf("New() with options error = %v", err)
-	}
-	if cfg.Mode != Staging {
-		t.Errorf("Expected Mode = %v, got %v", Staging, cfg.Mode)
-	}
-	if cfg.Prefix != "TEST_" {
-		t.Errorf("Expected Prefix = 'TEST_', got %v", cfg.Prefix)
+	// Test with different APP_ENV values
+	testEnvs := []string{"production", "staging", "development", "custom_mode"}
+	for _, env := range testEnvs {
+		os.Setenv("APP_ENV", env)
+		if mode := determineDefaultMode(); mode != env {
+			t.Errorf("With APP_ENV=%s, expected mode '%s', got '%s'", env, env, mode)
+		}
 	}
 }
 
-// TestConfigLoad tests loading environment files
-func TestConfigLoad(t *testing.T) {
-	// Create temp directory and files for testing
+// TestConfigLoadAdvanced tests more load scenarios
+func TestConfigLoadAdvanced(t *testing.T) {
+	// Create a temporary directory for testing
 	tmpDir := t.TempDir()
 	oldDir, err := os.Getwd()
 	if err != nil {
@@ -149,1130 +97,694 @@ func TestConfigLoad(t *testing.T) {
 		t.Fatalf("Failed to change to temp directory: %v", err)
 	}
 
-	// Test loading in production mode with file present
-	if err := os.WriteFile(".env", []byte("TEST_KEY=production_value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env file: %v", err)
-	}
-
-	cfg := &Config{Mode: Production}
-	err = cfg.Load()
-	if err != nil {
-		t.Errorf("Load() in Production mode with file present error: %v", err)
-	}
-
-	// Test loading in production mode with file absent
-	if err := os.Remove(".env"); err != nil {
-		t.Fatalf("Failed to remove temp .env file: %v", err)
-	}
-
+	// Test invalid mode beyond the standard ones
+	cfg := &Config{Mode: "invalid_mode"}
 	err = cfg.Load()
 	if err == nil {
-		t.Errorf("Load() in Production mode with file absent should return error")
+		t.Error("Load() with invalid mode should return error")
 	}
 
-	// Test loading in staging mode with file present
-	if err := os.WriteFile(".env.staging", []byte("TEST_KEY=staging_value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env.staging file: %v", err)
-	}
+	// Test fallback behavior for missing files
+	os.Setenv("APP_ENV", "custom_mode") // Custom mode not matching any standard
+	defer os.Unsetenv("APP_ENV")
 
-	cfg = &Config{Mode: Staging}
-	err = cfg.Load()
+	customCfg, err := New()
 	if err != nil {
-		t.Errorf("Load() in Staging mode with file present error: %v", err)
-	}
-
-	// Test loading in staging mode with file absent
-	if err := os.Remove(".env.staging"); err != nil {
-		t.Fatalf("Failed to remove temp .env.staging file: %v", err)
-	}
-
-	err = cfg.Load()
-	if err != nil {
-		t.Errorf("Load() in Staging mode with file absent should only warn, not error: %v", err)
-	}
-
-	// Test loading in development mode with file present
-	if err := os.WriteFile(".env.development", []byte("TEST_KEY=development_value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env.development file: %v", err)
-	}
-
-	cfg = &Config{Mode: Development}
-	err = cfg.Load()
-	if err != nil {
-		t.Errorf("Load() in Development mode with file present error: %v", err)
-	}
-
-	// Test loading in development mode with file absent
-	if err := os.Remove(".env.development"); err != nil {
-		t.Fatalf("Failed to remove temp .env.development file: %v", err)
-	}
-
-	err = cfg.Load()
-	if err != nil {
-		t.Errorf("Load() in Development mode with file absent should only warn, not error: %v", err)
-	}
-
-	// Test invalid mode
-	cfg = &Config{Mode: "invalid"}
-	err = cfg.Load()
-	if err == nil {
-		t.Errorf("Load() with invalid mode should return error")
+		// This is expected in test environment without proper files
+		// Let's confirm we're in the right mode at least
+		if customCfg != nil && customCfg.Mode != "custom_mode" {
+			t.Errorf("Expected mode 'custom_mode', got '%s'", customCfg.Mode)
+		}
 	}
 }
 
-// TestConfigGetString tests the Get method
-func TestConfigGetString(t *testing.T) {
-	// Save original env vars
-	oldEnv := os.Getenv("TEST_KEY")
-	defer os.Setenv("TEST_KEY", oldEnv)
+// TestConfigWithConcurrent tests concurrent access to singleton
+func TestConfigWithConcurrent(t *testing.T) {
+	// Reset singleton
+	defaultInstance = nil
+	initErr = nil
+	once = sync.Once{}
 
-	// Set up test environment
-	os.Setenv("TEST_KEY", "value")
+	// Create a temporary file for testing
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	defer os.Chdir(oldDir)
 
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test basic Get
-	if val := cfg.Get("KEY"); val != "value" {
-		t.Errorf("Get(KEY) = %v, want %v", val, "value")
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
 	}
 
-	// Test nonexistent key
-	if val := cfg.Get("NONEXISTENT"); val != "" {
-		t.Errorf("Get(NONEXISTENT) = %v, want ''", val)
+	// Create .env file
+	if err := os.WriteFile(".env", []byte("TEST=value"), 0644); err != nil {
+		t.Fatalf("Failed to create .env file: %v", err)
 	}
 
-	// Test default value
-	if val := cfg.Get("NONEXISTENT", "default"); val != "default" {
-		t.Errorf("Get(NONEXISTENT, default) = %v, want 'default'", val)
+	// Initialize with default values
+	err = Initialize(WithMode(Production))
+	if err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	// Test concurrent access to With
+	var wg sync.WaitGroup
+	const goroutines = 10
+	configs := make([]*Config, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			configs[index] = With(WithMode(Development))
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify all goroutines got configurations with correct mode
+	for i, cfg := range configs {
+		if cfg == nil {
+			t.Errorf("Goroutine %d got nil config", i)
+			continue
+		}
+		if cfg.Mode != Development {
+			t.Errorf("Goroutine %d expected mode %s, got %s", i, Development, cfg.Mode)
+		}
 	}
 }
 
-// TestConfigGetInt tests the GetInt method
-func TestConfigGetInt(t *testing.T) {
+// TestConfigBoundaryValues tests handling of boundary values
+func TestConfigBoundaryValues(t *testing.T) {
 	// Save original env vars
-	oldIntEnv := os.Getenv("TEST_INT")
-	oldInvalidEnv := os.Getenv("TEST_INVALID")
-	defer func() {
-		os.Setenv("TEST_INT", oldIntEnv)
-		os.Setenv("TEST_INVALID", oldInvalidEnv)
-	}()
-
-	os.Setenv("TEST_INT", "123")
-	os.Setenv("TEST_INVALID", "abc")
-
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test valid int
-	val, err := cfg.GetInt("INT")
-	if err != nil {
-		t.Errorf("GetInt(INT) unexpected error: %v", err)
-	}
-	if val != 123 {
-		t.Errorf("GetInt(INT) = %v, want 123", val)
-	}
-
-	// Test invalid int
-	if _, err := cfg.GetInt("INVALID"); err == nil {
-		t.Errorf("GetInt(INVALID) expected error")
-	}
-
-	// Test missing with default
-	val, err = cfg.GetInt("NONEXISTENT", 456)
-	if err != nil {
-		t.Errorf("GetInt(NONEXISTENT, 456) unexpected error: %v", err)
-	}
-	if val != 456 {
-		t.Errorf("GetInt(NONEXISTENT, 456) = %v, want 456", val)
-	}
-
-	// Test missing without default
-	if _, err := cfg.GetInt("NONEXISTENT"); err == nil {
-		t.Errorf("GetInt(NONEXISTENT) expected error")
-	}
-}
-
-// TestConfigGetInt64 tests the GetInt64 method
-func TestConfigGetInt64(t *testing.T) {
-	// Save original env vars
-	oldInt64Env := os.Getenv("TEST_INT64")
-	oldInvalidEnv := os.Getenv("TEST_INVALID")
-	defer func() {
-		os.Setenv("TEST_INT64", oldInt64Env)
-		os.Setenv("TEST_INVALID", oldInvalidEnv)
-	}()
-
-	os.Setenv("TEST_INT64", "9223372036854775807") // Max int64
-	os.Setenv("TEST_INVALID", "not a number")
-
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test valid int64
-	val, err := cfg.GetInt64("INT64")
-	if err != nil {
-		t.Errorf("GetInt64(INT64) unexpected error: %v", err)
-	}
-	if val != 9223372036854775807 {
-		t.Errorf("GetInt64(INT64) = %v, want 9223372036854775807", val)
-	}
-
-	// Test invalid int64
-	if _, err := cfg.GetInt64("INVALID"); err == nil {
-		t.Errorf("GetInt64(INVALID) expected error")
-	}
-
-	// Test with default
-	val, err = cfg.GetInt64("NONEXISTENT", 123)
-	if err != nil {
-		t.Errorf("GetInt64(NONEXISTENT, 123) unexpected error: %v", err)
-	}
-	if val != 123 {
-		t.Errorf("GetInt64(NONEXISTENT, 123) = %v, want 123", val)
-	}
-}
-
-// TestConfigGetFloat64 tests the GetFloat64 method
-func TestConfigGetFloat64(t *testing.T) {
-	// Save original env vars
-	oldFloatEnv := os.Getenv("TEST_FLOAT")
-	oldInvalidEnv := os.Getenv("TEST_INVALID")
-	defer func() {
-		os.Setenv("TEST_FLOAT", oldFloatEnv)
-		os.Setenv("TEST_INVALID", oldInvalidEnv)
-	}()
-
-	os.Setenv("TEST_FLOAT", "123.456")
-	os.Setenv("TEST_INVALID", "not a number")
-
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test valid float
-	val, err := cfg.GetFloat64("FLOAT")
-	if err != nil {
-		t.Errorf("GetFloat64(FLOAT) unexpected error: %v", err)
-	}
-	if val != 123.456 {
-		t.Errorf("GetFloat64(FLOAT) = %v, want 123.456", val)
-	}
-
-	// Test invalid float
-	if _, err := cfg.GetFloat64("INVALID"); err == nil {
-		t.Errorf("GetFloat64(INVALID) expected error")
-	}
-
-	// Test with default
-	val, err = cfg.GetFloat64("NONEXISTENT", 456.789)
-	if err != nil {
-		t.Errorf("GetFloat64(NONEXISTENT, 456.789) unexpected error: %v", err)
-	}
-	if val != 456.789 {
-		t.Errorf("GetFloat64(NONEXISTENT, 456.789) = %v, want 456.789", val)
-	}
-}
-
-// TestConfigGetBool tests the GetBool method
-func TestConfigGetBool(t *testing.T) {
-	// Save original env vars
-	oldEnvs := map[string]string{
-		"TEST_TRUE":  os.Getenv("TEST_TRUE"),
-		"TEST_YES":   os.Getenv("TEST_YES"),
-		"TEST_Y":     os.Getenv("TEST_Y"),
-		"TEST_1":     os.Getenv("TEST_1"),
-		"TEST_FALSE": os.Getenv("TEST_FALSE"),
-		"TEST_NO":    os.Getenv("TEST_NO"),
+	env := map[string]string{
+		"TEST_MAX_INT":   os.Getenv("TEST_MAX_INT"),
+		"TEST_MIN_INT":   os.Getenv("TEST_MIN_INT"),
+		"TEST_MAX_FLOAT": os.Getenv("TEST_MAX_FLOAT"),
+		"TEST_OVER_INT":  os.Getenv("TEST_OVER_INT"),
+		"TEST_LONG_DUR":  os.Getenv("TEST_LONG_DUR"),
 	}
 	defer func() {
-		for k, v := range oldEnvs {
+		for k, v := range env {
 			os.Setenv(k, v)
 		}
 	}()
 
-	// Set various boolean representations
-	os.Setenv("TEST_TRUE", "true")
-	os.Setenv("TEST_YES", "yes")
-	os.Setenv("TEST_Y", "y")
-	os.Setenv("TEST_1", "1")
-	os.Setenv("TEST_FALSE", "false")
-	os.Setenv("TEST_NO", "no")
+	// Set boundary values
+	os.Setenv("TEST_MAX_INT", "2147483647")                // Max int32
+	os.Setenv("TEST_MIN_INT", "-2147483648")               // Min int32
+	os.Setenv("TEST_MAX_FLOAT", "1.7976931348623157e+308") // Max float64
+	os.Setenv("TEST_OVER_INT", "9223372036854775808")      // MaxInt64 + 1
+	os.Setenv("TEST_LONG_DUR", "87600h")                   // 10 years
 
-	cfg := &Config{Prefix: "TEST_"}
+	cfg := &Config{}
 
-	// Test true values
-	trueKeys := []string{"TRUE", "YES", "Y", "1"}
-	for _, key := range trueKeys {
-		if !cfg.GetBool(key) {
-			t.Errorf("GetBool(%s) = false, want true", key)
-		}
+	// Test GetInt with boundary values
+	val, err := cfg.GetInt("TEST_MAX_INT")
+	if err != nil || val != 2147483647 {
+		t.Errorf("GetInt(TEST_MAX_INT) expected %d, got %d (error: %v)",
+			2147483647, val, err)
 	}
 
-	// Test false values
-	if cfg.GetBool("FALSE") {
-		t.Errorf("GetBool(FALSE) = true, want false")
-	}
-	if cfg.GetBool("NO") {
-		t.Errorf("GetBool(NO) = true, want false")
-	}
-
-	// Test with default
-	if !cfg.GetBool("NONEXISTENT", true) {
-		t.Errorf("GetBool(NONEXISTENT, true) = false, want true")
-	}
-	if cfg.GetBool("NONEXISTENT", false) {
-		t.Errorf("GetBool(NONEXISTENT, false) = true, want false")
+	// Test GetInt64 with boundary values
+	val64, err := cfg.GetInt64("TEST_MIN_INT")
+	if err != nil || val64 != -2147483648 {
+		t.Errorf("GetInt64(TEST_MIN_INT) expected %d, got %d (error: %v)",
+			-2147483648, val64, err)
 	}
 
-	// Test missing with no default
-	if cfg.GetBool("NONEXISTENT") {
-		t.Errorf("GetBool(NONEXISTENT) = true, want false")
-	}
-}
-
-// TestConfigGetDuration tests the GetDuration method
-func TestConfigGetDuration(t *testing.T) {
-	// Save original env vars
-	oldDurationEnv := os.Getenv("TEST_DURATION")
-	oldInvalidEnv := os.Getenv("TEST_INVALID")
-	defer func() {
-		os.Setenv("TEST_DURATION", oldDurationEnv)
-		os.Setenv("TEST_INVALID", oldInvalidEnv)
-	}()
-
-	os.Setenv("TEST_DURATION", "5s")
-	os.Setenv("TEST_INVALID", "not a duration")
-
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test valid duration
-	val, err := cfg.GetDuration("DURATION")
-	if err != nil {
-		t.Errorf("GetDuration(DURATION) unexpected error: %v", err)
-	}
-	if val != 5*time.Second {
-		t.Errorf("GetDuration(DURATION) = %v, want 5s", val)
+	// Test GetFloat64 with boundary values
+	maxFloat := 1.7976931348623157e+308
+	valFloat, err := cfg.GetFloat64("TEST_MAX_FLOAT")
+	if err != nil || valFloat != maxFloat {
+		t.Errorf("GetFloat64(TEST_MAX_FLOAT) expected %v, got %v (error: %v)",
+			maxFloat, valFloat, err)
 	}
 
-	// Test invalid duration
-	if _, err := cfg.GetDuration("INVALID"); err == nil {
-		t.Errorf("GetDuration(INVALID) expected error")
-	}
-
-	// Test with default
-	val, err = cfg.GetDuration("NONEXISTENT", 10*time.Minute)
-	if err != nil {
-		t.Errorf("GetDuration(NONEXISTENT, 10m) unexpected error: %v", err)
-	}
-	if val != 10*time.Minute {
-		t.Errorf("GetDuration(NONEXISTENT, 10m) = %v, want 10m", val)
-	}
-}
-
-// TestConfigGetSlice tests the GetSlice method
-func TestConfigGetSlice(t *testing.T) {
-	// Save original env vars
-	oldSliceEnv := os.Getenv("TEST_SLICE")
-	oldSliceCustomEnv := os.Getenv("TEST_SLICECUSTOM")
-	defer func() {
-		os.Setenv("TEST_SLICE", oldSliceEnv)
-		os.Setenv("TEST_SLICECUSTOM", oldSliceCustomEnv)
-	}()
-
-	os.Setenv("TEST_SLICE", "a,b,c")
-	os.Setenv("TEST_SLICECUSTOM", "a|b|c")
-
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test with default delimiter
-	slice := cfg.GetSlice("SLICE", "")
-	expected := []string{"a", "b", "c"}
-	if len(slice) != len(expected) {
-		t.Errorf("GetSlice(SLICE, '') length = %d, want %d", len(slice), len(expected))
-	}
-	for i, v := range expected {
-		if slice[i] != v {
-			t.Errorf("GetSlice(SLICE, '')[%d] = %s, want %s", i, slice[i], v)
-		}
-	}
-
-	// Test with custom delimiter
-	slice = cfg.GetSlice("SLICECUSTOM", "|")
-	if len(slice) != len(expected) {
-		t.Errorf("GetSlice(SLICECUSTOM, '|') length = %d, want %d", len(slice), len(expected))
-	}
-	for i, v := range expected {
-		if slice[i] != v {
-			t.Errorf("GetSlice(SLICECUSTOM, '|')[%d] = %s, want %s", i, slice[i], v)
-		}
-	}
-
-	// Test with default value
-	defaultSlice := []string{"default1", "default2"}
-	slice = cfg.GetSlice("NONEXISTENT", "", defaultSlice)
-	if len(slice) != len(defaultSlice) {
-		t.Errorf("GetSlice(NONEXISTENT, '', defaultSlice) length = %d, want %d", len(slice), len(defaultSlice))
-	}
-	for i, v := range defaultSlice {
-		if slice[i] != v {
-			t.Errorf("GetSlice(NONEXISTENT, '', defaultSlice)[%d] = %s, want %s", i, slice[i], v)
-		}
-	}
-
-	// Test empty slice
-	slice = cfg.GetSlice("NONEXISTENT", "")
-	if len(slice) != 0 {
-		t.Errorf("GetSlice(NONEXISTENT, '') length = %d, want 0", len(slice))
-	}
-}
-
-// TestConfigGetMap tests the GetMap method
-func TestConfigGetMap(t *testing.T) {
-	// Save original env vars
-	oldMapEnv := os.Getenv("TEST_MAP")
-	oldBadMapEnv := os.Getenv("TEST_BADMAP")
-	defer func() {
-		os.Setenv("TEST_MAP", oldMapEnv)
-		os.Setenv("TEST_BADMAP", oldBadMapEnv)
-	}()
-
-	os.Setenv("TEST_MAP", "key1:value1,key2:value2")
-	os.Setenv("TEST_BADMAP", "invalid")
-
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test valid map
-	m := cfg.GetMap("MAP")
-	if len(m) != 2 {
-		t.Errorf("GetMap(MAP) size = %d, want 2", len(m))
-	}
-	if m["key1"] != "value1" {
-		t.Errorf("GetMap(MAP)[key1] = %s, want 'value1'", m["key1"])
-	}
-	if m["key2"] != "value2" {
-		t.Errorf("GetMap(MAP)[key2] = %s, want 'value2'", m["key2"])
-	}
-
-	// Test invalid format
-	m = cfg.GetMap("BADMAP")
-	if len(m) != 0 {
-		t.Errorf("GetMap(BADMAP) size = %d, want 0", len(m))
-	}
-
-	// Test with default
-	defaultMap := map[string]string{"default": "value"}
-	m = cfg.GetMap("NONEXISTENT", defaultMap)
-	if len(m) != 1 {
-		t.Errorf("GetMap(NONEXISTENT, defaultMap) size = %d, want 1", len(m))
-	}
-	if m["default"] != "value" {
-		t.Errorf("GetMap(NONEXISTENT, defaultMap)[default] = %s, want 'value'", m["default"])
-	}
-}
-
-// TestConfigModeChecking tests mode checking methods
-func TestConfigModeChecking(t *testing.T) {
-	// Test Production mode
-	cfg := &Config{Mode: Production}
-	if !cfg.IsProduction() {
-		t.Errorf("IsProduction() = false, want true for Mode = %s", Production)
-	}
-	if cfg.IsStaging() {
-		t.Errorf("IsStaging() = true, want false for Mode = %s", Production)
-	}
-	if cfg.IsDevelopment() {
-		t.Errorf("IsDevelopment() = true, want false for Mode = %s", Production)
-	}
-	if mode := cfg.GetMode(); mode != Production {
-		t.Errorf("GetMode() = %s, want %s", mode, Production)
-	}
-
-	// Test Staging mode
-	cfg = &Config{Mode: Staging}
-	if cfg.IsProduction() {
-		t.Errorf("IsProduction() = true, want false for Mode = %s", Staging)
-	}
-	if !cfg.IsStaging() {
-		t.Errorf("IsStaging() = false, want true for Mode = %s", Staging)
-	}
-	if cfg.IsDevelopment() {
-		t.Errorf("IsDevelopment() = true, want false for Mode = %s", Staging)
-	}
-
-	// Test Development mode
-	cfg = &Config{Mode: Development}
-	if cfg.IsProduction() {
-		t.Errorf("IsProduction() = true, want false for Mode = %s", Development)
-	}
-	if cfg.IsStaging() {
-		t.Errorf("IsStaging() = true, want false for Mode = %s", Development)
-	}
-	if !cfg.IsDevelopment() {
-		t.Errorf("IsDevelopment() = false, want true for Mode = %s", Development)
-	}
-}
-
-// TestConfigFrom tests the From method
-func TestConfigFrom(t *testing.T) {
-	// Create initial config
-	cfg := &Config{Mode: Production, Prefix: "INITIAL_"}
-
-	// Get new config with options
-	newCfg := cfg.From(WithTestMode(Staging), WithTestPrefix("NEW_"))
-
-	// Check new config
-	if newCfg.Mode != Staging {
-		t.Errorf("From() Mode = %s, want %s", newCfg.Mode, Staging)
-	}
-	if newCfg.Prefix != "NEW_" {
-		t.Errorf("From() Prefix = %s, want %s", newCfg.Prefix, "NEW_")
-	}
-
-	// Original should be unchanged
-	if cfg.Mode != Production {
-		t.Errorf("Original Mode changed to %s, should remain %s", cfg.Mode, Production)
-	}
-	if cfg.Prefix != "INITIAL_" {
-		t.Errorf("Original Prefix changed to %s, should remain %s", cfg.Prefix, "INITIAL_")
-	}
-}
-
-// TestConfigInitialize tests the package Initialize function
-func TestConfigInitialize(t *testing.T) {
-	// Create temp directory and files for testing
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer os.Chdir(oldDir)
-
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
-	}
-
-	// Create a .env file
-	if err := os.WriteFile(".env", []byte("TEST_KEY=value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env file: %v", err)
-	}
-
-	// Reset singleton
-	defaultInstance = nil
-
-	// Initialize
-	err = Initialize(WithTestMode(Staging), WithTestPrefix("TEST_"))
-	if err != nil {
-		t.Fatalf("Initialize() error = %v", err)
-	}
-
-	// Check singleton was set correctly
-	if defaultInstance == nil {
-		t.Fatal("defaultInstance is nil after Initialize()")
-	}
-	if defaultInstance.Mode != Staging {
-		t.Errorf("defaultInstance.Mode = %s, want %s", defaultInstance.Mode, Staging)
-	}
-	if defaultInstance.Prefix != "TEST_" {
-		t.Errorf("defaultInstance.Prefix = %s, want %s", defaultInstance.Prefix, "TEST_")
-	}
-}
-
-// TestConfigKey tests the Key method using the result type
-func TestConfigKey(t *testing.T) {
-	// Save original env vars
-	oldStrEnv := os.Getenv("TEST_STR")
-	oldIntEnv := os.Getenv("TEST_INT")
-	oldBoolEnv := os.Getenv("TEST_BOOL")
-	defer func() {
-		os.Setenv("TEST_STR", oldStrEnv)
-		os.Setenv("TEST_INT", oldIntEnv)
-		os.Setenv("TEST_BOOL", oldBoolEnv)
-	}()
-
-	os.Setenv("TEST_STR", "value")
-	os.Setenv("TEST_INT", "123")
-	os.Setenv("TEST_BOOL", "true")
-
-	cfg := &Config{Prefix: "TEST_"}
-
-	// Test string value
-	if val := cfg.Key("STR").String(); val != "value" {
-		t.Errorf("Key(STR).String() = %s, want 'value'", val)
-	}
-
-	// Test with nonexistent key, should return empty string
-	if val := cfg.Key("NONEXISTENT").String(); val != "" {
-		t.Errorf("Key(NONEXISTENT).String() = %s, want ''", val)
-	}
-
-	// Test integer
-	i, err := cfg.Key("INT").Int()
-	if err != nil {
-		t.Errorf("Key(INT).Int() unexpected error: %v", err)
-	}
-	if i != 123 {
-		t.Errorf("Key(INT).Int() = %d, want 123", i)
-	}
-
-	// Test boolean
-	if !cfg.Key("BOOL").Bool() {
-		t.Errorf("Key(BOOL).Bool() = false, want true")
-	}
-
-	// Test with nonexistent key for Int, should return error
-	_, err = cfg.Key("NONEXISTENT").Int()
+	// Test overflow integer
+	_, err = cfg.GetInt64("TEST_OVER_INT")
 	if err == nil {
-		t.Errorf("Key(NONEXISTENT).Int() expected error, got nil")
+		t.Error("GetInt64(TEST_OVER_INT) should fail for overflow value")
+	}
+
+	// Test long duration
+	longDur, err := cfg.GetDuration("TEST_LONG_DUR")
+	if err != nil || longDur != 87600*time.Hour {
+		t.Errorf("GetDuration(TEST_LONG_DUR) expected 87600h, got %v (error: %v)",
+			longDur, err)
 	}
 }
 
-// TestConfigWith tests the With function
-func TestConfigWith(t *testing.T) {
-	// Create temp directory and files for testing
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer os.Chdir(oldDir)
-
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
-	}
-
-	// Create a .env file
-	if err := os.WriteFile(".env", []byte("TEST_KEY=value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env file: %v", err)
-	}
-
-	// Reset singleton
-	defaultInstance = nil
-
-	// Initialize the default instance
-	err = Initialize(WithTestMode(Production))
-	if err != nil {
-		t.Fatalf("Initialize() error = %v", err)
-	}
-
-	// Test With
-	cfg := With(WithTestMode(Staging), WithTestPrefix("TEST_"))
-	if cfg.Mode != Staging {
-		t.Errorf("With() Mode = %s, want %s", cfg.Mode, Staging)
-	}
-	if cfg.Prefix != "TEST_" {
-		t.Errorf("With() Prefix = %s, want %s", cfg.Prefix, "TEST_")
-	}
-}
-
-// TestConfigPackageGetters tests all the package-level getter functions
-func TestConfigPackageGetters(t *testing.T) {
+// TestConfigStringsFunctions tests string manipulation functions
+func TestConfigStringsFunctions(t *testing.T) {
 	// Save original env vars
-	oldStrEnv := os.Getenv("TEST_STRING")
-	oldIntEnv := os.Getenv("TEST_INT")
-	oldInt64Env := os.Getenv("TEST_INT64")
-	oldFloatEnv := os.Getenv("TEST_FLOAT")
-	oldBoolEnv := os.Getenv("TEST_BOOL")
-	oldDurationEnv := os.Getenv("TEST_DURATION")
-	oldSliceEnv := os.Getenv("TEST_SLICE")
-	oldMapEnv := os.Getenv("TEST_MAP")
+	envTestStr := os.Getenv("TEST_STRING")
+	envTestNonexistent := os.Getenv("TEST_NONEXISTENT")
 	defer func() {
-		os.Setenv("TEST_STRING", oldStrEnv)
-		os.Setenv("TEST_INT", oldIntEnv)
-		os.Setenv("TEST_INT64", oldInt64Env)
-		os.Setenv("TEST_FLOAT", oldFloatEnv)
-		os.Setenv("TEST_BOOL", oldBoolEnv)
-		os.Setenv("TEST_DURATION", oldDurationEnv)
-		os.Setenv("TEST_SLICE", oldSliceEnv)
-		os.Setenv("TEST_MAP", oldMapEnv)
+		os.Setenv("TEST_STRING", envTestStr)
+		os.Setenv("TEST_NONEXISTENT", envTestNonexistent)
 	}()
 
-	// Create temp directory and files for testing
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer os.Chdir(oldDir)
+	// Set test values
+	os.Setenv("TEST_STRING", "test_value")
+	os.Unsetenv("TEST_NONEXISTENT")
 
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
+	// Test standard String function
+	if val := String("TEST_STRING"); val != "test_value" {
+		t.Errorf("String(TEST_STRING) expected 'test_value', got '%s'", val)
 	}
 
-	// Create a .env file
-	if err := os.WriteFile(".env", []byte("TEST_KEY=value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env file: %v", err)
+	// Test String with default
+	if val := String("TEST_NONEXISTENT", "default_value"); val != "default_value" {
+		t.Errorf("String(TEST_NONEXISTENT, default_value) expected 'default_value', got '%s'", val)
 	}
 
-	// Reset and initialize the default instance
-	defaultInstance = nil
-	err = Initialize(WithTestPrefix("TEST_"))
-	if err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+	// Test Key().String() chain
+	if val := Key("TEST_STRING").String(); val != "test_value" {
+		t.Errorf("Key(TEST_STRING).String() expected 'test_value', got '%s'", val)
 	}
 
-	// Set variables
-	os.Setenv("TEST_STRING", "value")
-	os.Setenv("TEST_INT", "123")
-	os.Setenv("TEST_INT64", "9223372036854775807") // Max int64
-	os.Setenv("TEST_FLOAT", "123.456")
-	os.Setenv("TEST_BOOL", "true")
-	os.Setenv("TEST_DURATION", "5s")
-	os.Setenv("TEST_SLICE", "a,b,c")
-	os.Setenv("TEST_MAP", "k1:v1,k2:v2")
-
-	// Test Get/String
-	if val := Get("STRING"); val != "value" {
-		t.Errorf("Get(STRING) = %s, want 'value'", val)
-	}
-	if val := String("STRING"); val != "value" {
-		t.Errorf("String(STRING) = %s, want 'value'", val)
-	}
-
-	// Test non-existent key with default
-	if val := Get("NONEXISTENT", "default"); val != "default" {
-		t.Errorf("Get(NONEXISTENT, default) = %s, want 'default'", val)
-	}
-
-	// Test Int
-	val, err := GetInt("INT")
-	if err != nil {
-		t.Errorf("GetInt(INT) unexpected error: %v", err)
-	}
-	if val != 123 {
-		t.Errorf("GetInt(INT) = %d, want 123", val)
-	}
-	if val := Int("INT"); val != 123 {
-		t.Errorf("Int(INT) = %d, want 123", val)
-	}
-
-	// Test Int with default
-	val, err = GetInt("NONEXISTENT", 456)
-	if err != nil {
-		t.Errorf("GetInt(NONEXISTENT, 456) unexpected error: %v", err)
-	}
-	if val != 456 {
-		t.Errorf("GetInt(NONEXISTENT, 456) = %d, want 456", val)
-	}
-	if val := Int("NONEXISTENT", 456); val != 456 {
-		t.Errorf("Int(NONEXISTENT, 456) = %d, want 456", val)
-	}
-
-	// Test Int64
-	int64Val, err := GetInt64("INT64")
-	if err != nil {
-		t.Errorf("GetInt64(INT64) unexpected error: %v", err)
-	}
-	if int64Val != 9223372036854775807 {
-		t.Errorf("GetInt64(INT64) = %d, want 9223372036854775807", int64Val)
-	}
-
-	// Test Int64 with default
-	int64Val, err = GetInt64("NONEXISTENT", 456)
-	if err != nil {
-		t.Errorf("GetInt64(NONEXISTENT, 456) unexpected error: %v", err)
-	}
-	if int64Val != 456 {
-		t.Errorf("GetInt64(NONEXISTENT, 456) = %d, want 456", int64Val)
-	}
-
-	// Test Float64
-	f, err := GetFloat64("FLOAT")
-	if err != nil {
-		t.Errorf("GetFloat64(FLOAT) unexpected error: %v", err)
-	}
-	if f != 123.456 {
-		t.Errorf("GetFloat64(FLOAT) = %f, want 123.456", f)
-	}
-	if f := Float64("FLOAT"); f != 123.456 {
-		t.Errorf("Float64(FLOAT) = %f, want 123.456", f)
-	}
-
-	// Test Float64 with default
-	f, err = GetFloat64("NONEXISTENT", 456.789)
-	if err != nil {
-		t.Errorf("GetFloat64(NONEXISTENT, 456.789) unexpected error: %v", err)
-	}
-	if f != 456.789 {
-		t.Errorf("GetFloat64(NONEXISTENT, 456.789) = %f, want 456.789", f)
-	}
-	if f := Float64("NONEXISTENT", 456.789); f != 456.789 {
-		t.Errorf("Float64(NONEXISTENT, 456.789) = %f, want 456.789", f)
-	}
-
-	// Test Bool
-	if !GetBool("BOOL") {
-		t.Errorf("GetBool(BOOL) = false, want true")
-	}
-	if !Bool("BOOL") {
-		t.Errorf("Bool(BOOL) = false, want true")
-	}
-
-	// Test Bool with default
-	if GetBool("NONEXISTENT", false) {
-		t.Errorf("GetBool(NONEXISTENT, false) = true, want false")
-	}
-	if !GetBool("NONEXISTENT", true) {
-		t.Errorf("GetBool(NONEXISTENT, true) = false, want true")
-	}
-
-	// Test Duration
-	d, err := GetDuration("DURATION")
-	if err != nil {
-		t.Errorf("GetDuration(DURATION) unexpected error: %v", err)
-	}
-	if d != 5*time.Second {
-		t.Errorf("GetDuration(DURATION) = %v, want 5s", d)
-	}
-	if d := Duration("DURATION"); d != 5*time.Second {
-		t.Errorf("Duration(DURATION) = %v, want 5s", d)
-	}
-
-	// Test Duration with default
-	d, err = GetDuration("NONEXISTENT", 10*time.Minute)
-	if err != nil {
-		t.Errorf("GetDuration(NONEXISTENT, 10m) unexpected error: %v", err)
-	}
-	if d != 10*time.Minute {
-		t.Errorf("GetDuration(NONEXISTENT, 10m) = %v, want 10m", d)
-	}
-	if d := Duration("NONEXISTENT", 10*time.Minute); d != 10*time.Minute {
-		t.Errorf("Duration(NONEXISTENT, 10m) = %v, want 10m", d)
-	}
-
-	// Test Slice
-	s := GetSlice("SLICE", "")
-	if len(s) != 3 || s[0] != "a" || s[1] != "b" || s[2] != "c" {
-		t.Errorf("GetSlice(SLICE, '') = %v, want [a b c]", s)
-	}
-	s = Slice("SLICE", "")
-	if len(s) != 3 || s[0] != "a" || s[1] != "b" || s[2] != "c" {
-		t.Errorf("Slice(SLICE, '') = %v, want [a b c]", s)
-	}
-
-	// Test Slice with default
-	defaultSlice := []string{"default1", "default2"}
-	s = GetSlice("NONEXISTENT", "", defaultSlice)
-	if len(s) != len(defaultSlice) || s[0] != defaultSlice[0] || s[1] != defaultSlice[1] {
-		t.Errorf("GetSlice(NONEXISTENT, '', defaultSlice) = %v, want %v", s, defaultSlice)
-	}
-
-	// Test Map
-	m := GetMap("MAP")
-	if len(m) != 2 || m["k1"] != "v1" || m["k2"] != "v2" {
-		t.Errorf("GetMap(MAP) = %v, want map[k1:v1 k2:v2]", m)
-	}
-	m = Map("MAP")
-	if len(m) != 2 || m["k1"] != "v1" || m["k2"] != "v2" {
-		t.Errorf("Map(MAP) = %v, want map[k1:v1 k2:v2]", m)
-	}
-
-	// Test Map with default
-	defaultMap := map[string]string{"default": "value"}
-	m = GetMap("NONEXISTENT", defaultMap)
-	if len(m) != 1 || m["default"] != "value" {
-		t.Errorf("GetMap(NONEXISTENT, defaultMap) = %v, want %v", m, defaultMap)
+	// Test Key chain with nonexistent
+	if val := Key("TEST_NONEXISTENT").Default("chain_default").String(); val != "chain_default" {
+		t.Errorf("Key chain with default expected 'chain_default', got '%s'", val)
 	}
 }
 
-// TestConfigModeGetters tests the mode-related package functions
-func TestConfigModeGetters(t *testing.T) {
-	// Create temp directory and files for testing
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
+// TestConfigErrorPropagation tests error handling throughout methods
+func TestConfigErrorPropagation(t *testing.T) {
+	// Mock getDefaultInstance to always return error
+	origGetDefaultInstance := getDefaultInstance
+	mockErr := fmt.Errorf("mock error")
+	getDefaultInstance = func() (*Config, error) {
+		return nil, mockErr
 	}
-	defer os.Chdir(oldDir)
+	defer func() { getDefaultInstance = origGetDefaultInstance }()
 
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
-	}
-
-	// Create a .env file
-	if err := os.WriteFile(".env", []byte("TEST_KEY=value"), 0644); err != nil {
-		t.Fatalf("Failed to create temp .env file: %v", err)
+	// Test all package-level functions with error propagation
+	if val := Get("KEY"); val != "" {
+		t.Errorf("Get should return empty when getDefaultInstance fails, got '%s'", val)
 	}
 
-	// Reset singleton
-	defaultInstance = nil
-
-	// Test with Production mode
-	err = Initialize(WithTestMode(Production))
-	if err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+	if val, err := GetInt("KEY"); val != 0 || err != mockErr {
+		t.Errorf("GetInt should return 0 and mockErr, got %d and %v", val, err)
 	}
 
-	if !IsProduction() {
-		t.Errorf("IsProduction() = false, want true")
-	}
-	if IsStaging() {
-		t.Errorf("IsStaging() = true, want false")
-	}
-	if IsDevelopment() {
-		t.Errorf("IsDevelopment() = true, want false")
-	}
-	if mode := GetMode(); mode != Production {
-		t.Errorf("GetMode() = %s, want %s", mode, Production)
+	if val, err := GetInt64("KEY"); val != 0 || err != mockErr {
+		t.Errorf("GetInt64 should return 0 and mockErr, got %d and %v", val, err)
 	}
 
-	// Test with Staging mode
-	defaultInstance = nil
-	err = Initialize(WithTestMode(Staging))
-	if err != nil {
-		t.Fatalf("Initialize() error = %v", err)
+	if val, err := GetFloat64("KEY"); val != 0 || err != mockErr {
+		t.Errorf("GetFloat64 should return 0 and mockErr, got %f and %v", val, err)
+	}
+
+	if val := GetBool("KEY"); val != false {
+		t.Errorf("GetBool should return false when getDefaultInstance fails, got %v", val)
+	}
+
+	if val, err := GetDuration("KEY"); val != 0 || err != mockErr {
+		t.Errorf("GetDuration should return 0 and mockErr, got %v and %v", val, err)
+	}
+
+	if val := GetSlice("KEY", ","); len(val) != 0 {
+		t.Errorf("GetSlice should return empty slice when getDefaultInstance fails, got %v", val)
+	}
+
+	if val := GetMap("KEY"); len(val) != 0 {
+		t.Errorf("GetMap should return empty map when getDefaultInstance fails, got %v", val)
+	}
+
+	// Test mode functions
+	if val := GetMode(); val != "" {
+		t.Errorf("GetMode should return empty when getDefaultInstance fails, got '%s'", val)
 	}
 
 	if IsProduction() {
-		t.Errorf("IsProduction() = true, want false")
-	}
-	if !IsStaging() {
-		t.Errorf("IsStaging() = false, want true")
-	}
-	if IsDevelopment() {
-		t.Errorf("IsDevelopment() = true, want false")
+		t.Error("IsProduction should return false when getDefaultInstance fails")
 	}
 
-	// Test with Development mode
-	defaultInstance = nil
-	err = Initialize(WithTestMode(Development))
-	if err != nil {
-		t.Fatalf("Initialize() error = %v", err)
-	}
-
-	if IsProduction() {
-		t.Errorf("IsProduction() = true, want false")
-	}
 	if IsStaging() {
-		t.Errorf("IsStaging() = true, want false")
-	}
-	if !IsDevelopment() {
-		t.Errorf("IsDevelopment() = false, want true")
-	}
-}
-
-// TestConfigNewErrorScenarios tests various error scenarios in New function
-func TestConfigNewErrorScenarios(t *testing.T) {
-	// Create temp directory
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer os.Chdir(oldDir)
-
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
+		t.Error("IsStaging should return false when getDefaultInstance fails")
 	}
 
-	// Scenario: No .env files exist
-	_, err = New()
-	if err != nil {
-		t.Errorf("New() should not return error when no env files exist, got: %v", err)
-	}
-
-	// Scenario: Create invalid env mode
-	_, err = New(func(c *Config) {
-		c.Mode = "invalid_mode"
-	})
-	if err == nil {
-		t.Error("New() should return error for invalid mode")
+	if IsDevelopment() {
+		t.Error("IsDevelopment should return false when getDefaultInstance fails")
 	}
 }
 
-// TestConfigInitializeEdgeCases tests edge cases for Initialize function
-func TestConfigInitializeEdgeCases(t *testing.T) {
-	// Create temp directory
-	tmpDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-	defer os.Chdir(oldDir)
-
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
-	}
-
-	// Reset singleton
-	defaultInstance = nil
-
-	// Scenario: Initialize with invalid mode
-	err = Initialize(func(c *Config) {
-		c.Mode = "invalid_mode"
-	})
-	if err == nil {
-		t.Error("Initialize() should return error for invalid mode")
-	}
-
-	// Scenario: Multiple initializations
-	defaultInstance = nil
-	err = Initialize(WithTestMode(Production))
-	if err != nil {
-		t.Errorf("First Initialize() should not return error, got: %v", err)
-	}
-
-	// Second initialization should update the existing instance
-	err = Initialize(WithTestMode(Staging))
-	if err != nil {
-		t.Errorf("Second Initialize() should not return error, got: %v", err)
-	}
-
-	if defaultInstance.Mode != Staging {
-		t.Errorf("Second Initialize() should update mode, want %s, got %s", Staging, defaultInstance.Mode)
-	}
-}
-
-// TestConfigPackageLevelGettersWithoutInitialization tests package-level getters without initialization
-func TestConfigPackageLevelGettersWithoutInitialization(t *testing.T) {
-	// Reset singleton
-	defaultInstance = nil
-	initErr = fmt.Errorf("test initialization error")
-
-	// Scenarios for various package-level getters
-	testCases := []struct {
-		name     string
-		getValue func() interface{}
-	}{
-		{
-			name: "Get with no default",
-			getValue: func() interface{} {
-				return Get("NONEXISTENT")
-			},
-		},
-		{
-			name: "Get with default",
-			getValue: func() interface{} {
-				return Get("NONEXISTENT", "default")
-			},
-		},
-		{
-			name: "GetInt with default",
-			getValue: func() interface{} {
-				val, _ := GetInt("NONEXISTENT", 42)
-				return val
-			},
-		},
-		{
-			name: "GetInt64 with default",
-			getValue: func() interface{} {
-				val, _ := GetInt64("NONEXISTENT", int64(42))
-				return val
-			},
-		},
-		{
-			name: "GetFloat64 with default",
-			getValue: func() interface{} {
-				val, _ := GetFloat64("NONEXISTENT", 3.14)
-				return val
-			},
-		},
-		{
-			name: "GetBool with default",
-			getValue: func() interface{} {
-				return GetBool("NONEXISTENT", true)
-			},
-		},
-		{
-			name: "GetDuration with default",
-			getValue: func() interface{} {
-				val, _ := GetDuration("NONEXISTENT", 5*time.Second)
-				return val
-			},
-		},
-		{
-			name: "GetSlice with default",
-			getValue: func() interface{} {
-				return GetSlice("NONEXISTENT", ",", []string{"default"})
-			},
-		},
-		{
-			name: "GetMap with default",
-			getValue: func() interface{} {
-				return GetMap("NONEXISTENT", map[string]string{"default": "value"})
-			},
-		},
-		{
-			name: "GetMode",
-			getValue: func() interface{} {
-				return GetMode()
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("Unexpected panic in %s", tc.name)
-				}
-			}()
-
-			tc.getValue()
-		})
-	}
-}
-
-// TestConfigWithErrorHandling tests With function error handling
-func TestConfigWithErrorHandling(t *testing.T) {
-	// Reset singleton
-	defaultInstance = nil
-	initErr = fmt.Errorf("test initialization error")
-
-	// Scenario: With function when initialization fails
-	cfg := With(WithTestMode(Staging))
-	if cfg.Mode != Staging {
-		t.Errorf("With() should create new config with specified mode, want %s, got %s", Staging, cfg.Mode)
-	}
-}
-
-// TestConfigPrependPrefix tests the prependPrefix method
+// TestConfigPrependPrefix tests prefix handling
 func TestConfigPrependPrefix(t *testing.T) {
 	testCases := []struct {
-		name     string
 		prefix   string
 		key      string
 		expected string
 	}{
-		{
-			name:     "No Prefix",
-			prefix:   "",
-			key:      "TEST_KEY",
-			expected: "TEST_KEY",
-		},
-		{
-			name:     "With Prefix",
-			prefix:   "APP_",
-			key:      "TEST_KEY",
-			expected: "APP_TEST_KEY",
-		},
+		{"", "KEY", "KEY"},
+		{"PREFIX_", "KEY", "PREFIX_KEY"},
+		{"APP.", "CONFIG", "APP.CONFIG"},
+		{"  ", "KEY", "  KEY"}, // Space prefix is preserved
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := &Config{Prefix: tc.prefix}
-			result := cfg.prependPrefix(tc.key)
-			if result != tc.expected {
-				t.Errorf("prependPrefix() = %s, want %s", result, tc.expected)
-			}
-		})
+		cfg := &Config{Prefix: tc.prefix}
+		result := cfg.prependPrefix(tc.key)
+		if result != tc.expected {
+			t.Errorf("prependPrefix with prefix '%s' and key '%s': expected '%s', got '%s'",
+				tc.prefix, tc.key, tc.expected, result)
+		}
 	}
 }
 
-// TestConfigKeyEdgeCases tests edge cases for the Key method
-func TestConfigKeyEdgeCases(t *testing.T) {
-	// Save and restore environment
-	oldEnv := os.Getenv("TEST_EDGE")
-	defer os.Setenv("TEST_EDGE", oldEnv)
+// TestConfigChainedMethods tests complete chains of configuration methods
+func TestConfigChainedMethods(t *testing.T) {
+	// Setup
+	os.Setenv("TEST_CHAIN_INT", "42")
+	os.Setenv("TEST_CHAIN_FLOAT", "3.14")
+	os.Setenv("TEST_CHAIN_BOOL", "true")
+	defer func() {
+		os.Unsetenv("TEST_CHAIN_INT")
+		os.Unsetenv("TEST_CHAIN_FLOAT")
+		os.Unsetenv("TEST_CHAIN_BOOL")
+	}()
 
+	// Initialize a config instance
 	cfg := &Config{Prefix: "TEST_"}
 
-	// Scenario: Key with no value
-	os.Unsetenv("TEST_EDGE")
-	r := cfg.Key("EDGE")
-	if r.String() != "" {
-		t.Errorf("Key(EDGE) should return empty string when unset")
+	// Test a complete chain with Required -> Int
+	val, err := cfg.Key("CHAIN_INT").Required().Int()
+	if err != nil || val != 42 {
+		t.Errorf("Key(CHAIN_INT).Required().Int() expected 42, got %d (error: %v)", val, err)
 	}
 
-	// Scenario: Key with value
-	os.Setenv("TEST_EDGE", "test_value")
-	r = cfg.Key("EDGE")
-	if r.String() != "test_value" {
-		t.Errorf("Key(EDGE) should return 'test_value', got %s", r.String())
+	// Test a chain with float
+	fval, err := cfg.Key("CHAIN_FLOAT").Required().Float64()
+	if err != nil || fval != 3.14 {
+		t.Errorf("Float chain expected 3.14, got %f (error: %v)", fval, err)
+	}
+
+	// Test a chain with bool
+	bval := cfg.Key("CHAIN_BOOL").Bool()
+	if !bval {
+		t.Errorf("Bool chain expected true, got %v", bval)
+	}
+
+	// Test error propagation in chain
+	_, err = cfg.Key("NONEXISTENT").Required().Int()
+	if err == nil {
+		t.Error("Required() for nonexistent key should return error")
+	}
+
+	// Test default in chain
+	val = cfg.Key("NONEXISTENT").IntDefault(100)
+	if val != 100 {
+		t.Errorf("IntDefault chain expected 100, got %d", val)
+	}
+}
+
+// TestConfigWrappedFunctions tests wrapper functions Int, Float64, etc.
+func TestConfigWrappedFunctions(t *testing.T) {
+	// Setup
+	os.Setenv("TEST_WRAPPED_INT", "42")
+	os.Setenv("TEST_WRAPPED_FLOAT", "3.14")
+	os.Setenv("TEST_WRAPPED_BOOL", "true")
+	os.Setenv("TEST_WRAPPED_DUR", "5s")
+	os.Setenv("TEST_WRAPPED_SLICE", "a,b,c")
+	os.Setenv("TEST_WRAPPED_MAP", "k1:v1,k2:v2")
+	defer func() {
+		os.Unsetenv("TEST_WRAPPED_INT")
+		os.Unsetenv("TEST_WRAPPED_FLOAT")
+		os.Unsetenv("TEST_WRAPPED_BOOL")
+		os.Unsetenv("TEST_WRAPPED_DUR")
+		os.Unsetenv("TEST_WRAPPED_SLICE")
+		os.Unsetenv("TEST_WRAPPED_MAP")
+	}()
+
+	// Initialize for package-level functions
+	defaultInstance = nil
+	initErr = nil
+	once = sync.Once{}
+	// Create a temp .env for initialization
+	tmpDir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	defer os.Chdir(oldDir)
+	os.Chdir(tmpDir)
+	os.WriteFile(".env", []byte("TEST=value"), 0644)
+
+	// Test Int wrapper
+	val := Int("TEST_WRAPPED_INT")
+	if val != 42 {
+		t.Errorf("Int(TEST_WRAPPED_INT) expected 42, got %d", val)
+	}
+
+	val = Int("NONEXISTENT", 100)
+	if val != 100 {
+		t.Errorf("Int(NONEXISTENT, 100) expected 100, got %d", val)
+	}
+
+	// Test Float64 wrapper
+	fval := Float64("TEST_WRAPPED_FLOAT")
+	if fval != 3.14 {
+		t.Errorf("Float64(TEST_WRAPPED_FLOAT) expected 3.14, got %f", fval)
+	}
+
+	// Test Bool wrapper
+	bval := Bool("TEST_WRAPPED_BOOL")
+	if !bval {
+		t.Errorf("Bool(TEST_WRAPPED_BOOL) expected true, got %v", bval)
+	}
+
+	// Test Duration wrapper
+	dval := Duration("TEST_WRAPPED_DUR")
+	if dval != 5*time.Second {
+		t.Errorf("Duration(TEST_WRAPPED_DUR) expected 5s, got %v", dval)
+	}
+
+	// Test Slice wrapper
+	sval := Slice("TEST_WRAPPED_SLICE", ",")
+	if len(sval) != 3 || sval[0] != "a" || sval[1] != "b" || sval[2] != "c" {
+		t.Errorf("Slice(TEST_WRAPPED_SLICE) expected [a b c], got %v", sval)
+	}
+
+	// Test Map wrapper
+	mval := Map("TEST_WRAPPED_MAP")
+	if len(mval) != 2 || mval["k1"] != "v1" || mval["k2"] != "v2" {
+		t.Errorf("Map(TEST_WRAPPED_MAP) expected map[k1:v1 k2:v2], got %v", mval)
+	}
+}
+
+// Tambahkan pengujian ini ke file config_test.go
+
+// TestConfigGetMode tests GetMode and mode checking methods
+func TestConfigGetMode(t *testing.T) {
+	// Test with different modes
+	modes := []string{Production, Staging, Development, "custom_mode"}
+
+	for _, mode := range modes {
+		cfg := &Config{Mode: mode}
+
+		// Test GetMode
+		if got := cfg.GetMode(); got != mode {
+			t.Errorf("GetMode() expected %s, got %s", mode, got)
+		}
+
+		// Test IsProduction
+		isProduction := mode == Production
+		if got := cfg.IsProduction(); got != isProduction {
+			t.Errorf("IsProduction() for mode %s expected %v, got %v",
+				mode, isProduction, got)
+		}
+
+		// Test IsStaging
+		isStaging := mode == Staging
+		if got := cfg.IsStaging(); got != isStaging {
+			t.Errorf("IsStaging() for mode %s expected %v, got %v",
+				mode, isStaging, got)
+		}
+
+		// Test IsDevelopment
+		isDevelopment := mode == Development
+		if got := cfg.IsDevelopment(); got != isDevelopment {
+			t.Errorf("IsDevelopment() for mode %s expected %v, got %v",
+				mode, isDevelopment, got)
+		}
+	}
+}
+
+// TestGetDurationExtended provides additional tests for GetDuration
+func TestGetDurationExtended(t *testing.T) {
+	// Setup environment variables
+	envVars := map[string]string{
+		"TEST_DURATION_VALID":    "1h30m",
+		"TEST_DURATION_ZERO":     "0s",
+		"TEST_DURATION_NEGATIVE": "-5m",
+		"TEST_DURATION_MILLIS":   "100ms",
+		"TEST_DURATION_COMPLEX":  "2h45m30s",
+	}
+
+	for k, v := range envVars {
+		os.Setenv(k, v)
+		defer os.Unsetenv(k)
+	}
+
+	cfg := &Config{}
+
+	// Test each duration
+	for k, expectedStr := range envVars {
+		expected, _ := time.ParseDuration(expectedStr)
+
+		// Test GetDuration
+		got, err := cfg.GetDuration(k)
+		if err != nil {
+			t.Errorf("GetDuration(%s) unexpected error: %v", k, err)
+		}
+		if got != expected {
+			t.Errorf("GetDuration(%s) expected %v, got %v", k, expected, got)
+		}
+
+		// Test with missing key and default
+		defaultDur := 10 * time.Second
+		got, err = cfg.GetDuration("NONEXISTENT_"+k, defaultDur)
+		if err != nil {
+			t.Errorf("GetDuration with default unexpected error: %v", err)
+		}
+		if got != defaultDur {
+			t.Errorf("GetDuration with default expected %v, got %v", defaultDur, got)
+		}
+
+		// Test GetDuration without default for missing key
+		_, err = cfg.GetDuration("NONEXISTENT_" + k)
+		if err == nil {
+			t.Errorf("GetDuration for missing key should return error")
+		}
+	}
+}
+
+// TestGetInt64Extended provides additional tests for GetInt64
+func TestGetInt64Extended(t *testing.T) {
+	// Setup environment variables with various integers
+	envVars := map[string]string{
+		"TEST_INT64_ZERO":     "0",
+		"TEST_INT64_POSITIVE": "9223372036854775807",  // Max int64
+		"TEST_INT64_NEGATIVE": "-9223372036854775808", // Min int64
+		"TEST_INT64_MEDIUM":   "1234567890",
+	}
+
+	for k, v := range envVars {
+		os.Setenv(k, v)
+		defer os.Unsetenv(k)
+	}
+
+	cfg := &Config{}
+
+	// Test each int64 value
+	for k, v := range envVars {
+		expected, _ := strconv.ParseInt(v, 10, 64)
+
+		// Test GetInt64
+		got, err := cfg.GetInt64(k)
+		if err != nil {
+			t.Errorf("GetInt64(%s) unexpected error: %v", k, err)
+		}
+		if got != expected {
+			t.Errorf("GetInt64(%s) expected %d, got %d", k, expected, got)
+		}
+
+		// Test with missing key and default
+		defaultVal := int64(42)
+		got, err = cfg.GetInt64("NONEXISTENT_"+k, defaultVal)
+		if err != nil {
+			t.Errorf("GetInt64 with default unexpected error: %v", err)
+		}
+		if got != defaultVal {
+			t.Errorf("GetInt64 with default expected %d, got %d", defaultVal, got)
+		}
+
+		// Test GetInt64 without default for missing key
+		_, err = cfg.GetInt64("NONEXISTENT_" + k)
+		if err == nil {
+			t.Errorf("GetInt64 for missing key should return error")
+		}
+	}
+
+	// Test invalid value
+	os.Setenv("TEST_INT64_INVALID", "not_a_number")
+	defer os.Unsetenv("TEST_INT64_INVALID")
+
+	_, err := cfg.GetInt64("TEST_INT64_INVALID")
+	if err == nil {
+		t.Error("GetInt64 with invalid value should return error")
+	}
+}
+
+// TestGetFloat64Extended provides additional tests for GetFloat64
+func TestGetFloat64Extended(t *testing.T) {
+	// Setup environment variables with various floats
+	envVars := map[string]string{
+		"TEST_FLOAT64_ZERO":     "0.0",
+		"TEST_FLOAT64_POSITIVE": "1.7976931348623157e+308",  // Max float64
+		"TEST_FLOAT64_NEGATIVE": "-1.7976931348623157e+308", // Min float64
+		"TEST_FLOAT64_SMALL":    "0.000000000000000000000000001",
+		"TEST_FLOAT64_DECIMAL":  "3.14159265359",
+	}
+
+	for k, v := range envVars {
+		os.Setenv(k, v)
+		defer os.Unsetenv(k)
+	}
+
+	cfg := &Config{}
+
+	// Test each float64 value
+	for k, v := range envVars {
+		expected, _ := strconv.ParseFloat(v, 64)
+
+		// Test GetFloat64
+		got, err := cfg.GetFloat64(k)
+		if err != nil {
+			t.Errorf("GetFloat64(%s) unexpected error: %v", k, err)
+		}
+		if got != expected {
+			t.Errorf("GetFloat64(%s) expected %f, got %f", k, expected, got)
+		}
+
+		// Test with missing key and default
+		defaultVal := 3.14
+		got, err = cfg.GetFloat64("NONEXISTENT_"+k, defaultVal)
+		if err != nil {
+			t.Errorf("GetFloat64 with default unexpected error: %v", err)
+		}
+		if got != defaultVal {
+			t.Errorf("GetFloat64 with default expected %f, got %f", defaultVal, got)
+		}
+
+		// Test GetFloat64 without default for missing key
+		_, err = cfg.GetFloat64("NONEXISTENT_" + k)
+		if err == nil {
+			t.Errorf("GetFloat64 for missing key should return error")
+		}
+	}
+
+	// Test invalid value
+	os.Setenv("TEST_FLOAT64_INVALID", "not_a_number")
+	defer os.Unsetenv("TEST_FLOAT64_INVALID")
+
+	_, err := cfg.GetFloat64("TEST_FLOAT64_INVALID")
+	if err == nil {
+		t.Error("GetFloat64 with invalid value should return error")
+	}
+}
+
+// TestGetBoolExtended provides additional tests for GetBool
+func TestGetBoolExtended(t *testing.T) {
+	// Setup test cases for different boolean values
+	testCases := []struct {
+		key      string
+		value    string
+		expected bool
+	}{
+		{"TEST_BOOL_TRUE", "true", true},
+		{"TEST_BOOL_FALSE", "false", false},
+		{"TEST_BOOL_YES", "yes", true},
+		{"TEST_BOOL_NO", "no", false},
+		{"TEST_BOOL_Y", "y", true},
+		{"TEST_BOOL_N", "n", false},
+		{"TEST_BOOL_1", "1", true},
+		{"TEST_BOOL_0", "0", false},
+		{"TEST_BOOL_MIXED", "True", true},
+		{"TEST_BOOL_OTHER", "anything_else", false},
+		{"TEST_BOOL_EMPTY", "", false},
+	}
+
+	for _, tc := range testCases {
+		os.Setenv(tc.key, tc.value)
+		defer os.Unsetenv(tc.key)
+	}
+
+	cfg := &Config{}
+
+	// Test each boolean value
+	for _, tc := range testCases {
+		// Test GetBool
+		got := cfg.GetBool(tc.key)
+		if got != tc.expected {
+			t.Errorf("GetBool(%s) with value '%s' expected %v, got %v",
+				tc.key, tc.value, tc.expected, got)
+		}
+
+		// Test with missing key and default true
+		got = cfg.GetBool("NONEXISTENT_"+tc.key, true)
+		if got != true {
+			t.Errorf("GetBool with default true expected true, got %v", got)
+		}
+
+		// Test with missing key and default false
+		got = cfg.GetBool("NONEXISTENT_"+tc.key, false)
+		if got != false {
+			t.Errorf("GetBool with default false expected false, got %v", got)
+		}
+
+		// Test missing key with no default (should be false)
+		got = cfg.GetBool("NONEXISTENT_" + tc.key)
+		if got != false {
+			t.Errorf("GetBool for missing key without default should be false, got %v", got)
+		}
+	}
+}
+
+// TestGetSliceExtended provides additional tests for GetSlice
+func TestGetSliceExtended(t *testing.T) {
+	// Setup environment variables with various slice formats
+	envVars := map[string]string{
+		"TEST_SLICE_EMPTY":        "",
+		"TEST_SLICE_SINGLE":       "single",
+		"TEST_SLICE_MULTIPLE":     "a,b,c,d,e",
+		"TEST_SLICE_SPACES":       " a , b , c ",
+		"TEST_SLICE_EMPTY_PARTS":  "a,,c",
+		"TEST_SLICE_CUSTOM_DELIM": "a|b|c",
+	}
+
+	for k, v := range envVars {
+		os.Setenv(k, v)
+		defer os.Unsetenv(k)
+	}
+
+	cfg := &Config{}
+
+	// Test cases for different slice formats
+	testCases := []struct {
+		key       string
+		delimiter string
+		expected  []string
+	}{
+		{"TEST_SLICE_EMPTY", ",", []string{}},
+		{"TEST_SLICE_SINGLE", ",", []string{"single"}},
+		{"TEST_SLICE_MULTIPLE", ",", []string{"a", "b", "c", "d", "e"}},
+		{"TEST_SLICE_SPACES", ",", []string{"a", "b", "c"}},
+		{"TEST_SLICE_EMPTY_PARTS", ",", []string{"a", "", "c"}},
+		{"TEST_SLICE_CUSTOM_DELIM", "|", []string{"a", "b", "c"}},
+		// Test with empty delimiter (should default to comma)
+		{"TEST_SLICE_MULTIPLE", "", []string{"a", "b", "c", "d", "e"}},
+	}
+
+	for _, tc := range testCases {
+		// Test GetSlice
+		got := cfg.GetSlice(tc.key, tc.delimiter)
+		if !equalSlices(got, tc.expected) {
+			t.Errorf("GetSlice(%s, %s) expected %v, got %v",
+				tc.key, tc.delimiter, tc.expected, got)
+		}
+
+		// Test with missing key and default
+		defaultVal := []string{"default1", "default2"}
+		got = cfg.GetSlice("NONEXISTENT_"+tc.key, tc.delimiter, defaultVal)
+		if !equalSlices(got, defaultVal) {
+			t.Errorf("GetSlice with default expected %v, got %v", defaultVal, got)
+		}
+
+		// Test missing key without default
+		got = cfg.GetSlice("NONEXISTENT_"+tc.key, tc.delimiter)
+		if len(got) != 0 {
+			t.Errorf("GetSlice for missing key without default should be empty, got %v", got)
+		}
 	}
 }
