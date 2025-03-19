@@ -1,6 +1,7 @@
 package env
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -1042,5 +1043,236 @@ func TestConfigModeGetters(t *testing.T) {
 	}
 	if !IsDevelopment() {
 		t.Errorf("IsDevelopment() = false, want true")
+	}
+}
+
+// TestConfigNewErrorScenarios tests various error scenarios in New function
+func TestConfigNewErrorScenarios(t *testing.T) {
+	// Create temp directory
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	defer os.Chdir(oldDir)
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Scenario: No .env files exist
+	_, err = New()
+	if err != nil {
+		t.Errorf("New() should not return error when no env files exist, got: %v", err)
+	}
+
+	// Scenario: Create invalid env mode
+	_, err = New(func(c *Config) {
+		c.Mode = "invalid_mode"
+	})
+	if err == nil {
+		t.Error("New() should return error for invalid mode")
+	}
+}
+
+// TestConfigInitializeEdgeCases tests edge cases for Initialize function
+func TestConfigInitializeEdgeCases(t *testing.T) {
+	// Create temp directory
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	defer os.Chdir(oldDir)
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Reset singleton
+	defaultInstance = nil
+
+	// Scenario: Initialize with invalid mode
+	err = Initialize(func(c *Config) {
+		c.Mode = "invalid_mode"
+	})
+	if err == nil {
+		t.Error("Initialize() should return error for invalid mode")
+	}
+
+	// Scenario: Multiple initializations
+	defaultInstance = nil
+	err = Initialize(WithTestMode(Production))
+	if err != nil {
+		t.Errorf("First Initialize() should not return error, got: %v", err)
+	}
+
+	// Second initialization should update the existing instance
+	err = Initialize(WithTestMode(Staging))
+	if err != nil {
+		t.Errorf("Second Initialize() should not return error, got: %v", err)
+	}
+
+	if defaultInstance.Mode != Staging {
+		t.Errorf("Second Initialize() should update mode, want %s, got %s", Staging, defaultInstance.Mode)
+	}
+}
+
+// TestConfigPackageLevelGettersWithoutInitialization tests package-level getters without initialization
+func TestConfigPackageLevelGettersWithoutInitialization(t *testing.T) {
+	// Reset singleton
+	defaultInstance = nil
+	initErr = fmt.Errorf("test initialization error")
+
+	// Scenarios for various package-level getters
+	testCases := []struct {
+		name     string
+		getValue func() interface{}
+	}{
+		{
+			name: "Get with no default",
+			getValue: func() interface{} {
+				return Get("NONEXISTENT")
+			},
+		},
+		{
+			name: "Get with default",
+			getValue: func() interface{} {
+				return Get("NONEXISTENT", "default")
+			},
+		},
+		{
+			name: "GetInt with default",
+			getValue: func() interface{} {
+				val, _ := GetInt("NONEXISTENT", 42)
+				return val
+			},
+		},
+		{
+			name: "GetInt64 with default",
+			getValue: func() interface{} {
+				val, _ := GetInt64("NONEXISTENT", int64(42))
+				return val
+			},
+		},
+		{
+			name: "GetFloat64 with default",
+			getValue: func() interface{} {
+				val, _ := GetFloat64("NONEXISTENT", 3.14)
+				return val
+			},
+		},
+		{
+			name: "GetBool with default",
+			getValue: func() interface{} {
+				return GetBool("NONEXISTENT", true)
+			},
+		},
+		{
+			name: "GetDuration with default",
+			getValue: func() interface{} {
+				val, _ := GetDuration("NONEXISTENT", 5*time.Second)
+				return val
+			},
+		},
+		{
+			name: "GetSlice with default",
+			getValue: func() interface{} {
+				return GetSlice("NONEXISTENT", ",", []string{"default"})
+			},
+		},
+		{
+			name: "GetMap with default",
+			getValue: func() interface{} {
+				return GetMap("NONEXISTENT", map[string]string{"default": "value"})
+			},
+		},
+		{
+			name: "GetMode",
+			getValue: func() interface{} {
+				return GetMode()
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Unexpected panic in %s", tc.name)
+				}
+			}()
+
+			tc.getValue()
+		})
+	}
+}
+
+// TestConfigWithErrorHandling tests With function error handling
+func TestConfigWithErrorHandling(t *testing.T) {
+	// Reset singleton
+	defaultInstance = nil
+	initErr = fmt.Errorf("test initialization error")
+
+	// Scenario: With function when initialization fails
+	cfg := With(WithTestMode(Staging))
+	if cfg.Mode != Staging {
+		t.Errorf("With() should create new config with specified mode, want %s, got %s", Staging, cfg.Mode)
+	}
+}
+
+// TestConfigPrependPrefix tests the prependPrefix method
+func TestConfigPrependPrefix(t *testing.T) {
+	testCases := []struct {
+		name     string
+		prefix   string
+		key      string
+		expected string
+	}{
+		{
+			name:     "No Prefix",
+			prefix:   "",
+			key:      "TEST_KEY",
+			expected: "TEST_KEY",
+		},
+		{
+			name:     "With Prefix",
+			prefix:   "APP_",
+			key:      "TEST_KEY",
+			expected: "APP_TEST_KEY",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Prefix: tc.prefix}
+			result := cfg.prependPrefix(tc.key)
+			if result != tc.expected {
+				t.Errorf("prependPrefix() = %s, want %s", result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestConfigKeyEdgeCases tests edge cases for the Key method
+func TestConfigKeyEdgeCases(t *testing.T) {
+	// Save and restore environment
+	oldEnv := os.Getenv("TEST_EDGE")
+	defer os.Setenv("TEST_EDGE", oldEnv)
+
+	cfg := &Config{Prefix: "TEST_"}
+
+	// Scenario: Key with no value
+	os.Unsetenv("TEST_EDGE")
+	r := cfg.Key("EDGE")
+	if r.String() != "" {
+		t.Errorf("Key(EDGE) should return empty string when unset")
+	}
+
+	// Scenario: Key with value
+	os.Setenv("TEST_EDGE", "test_value")
+	r = cfg.Key("EDGE")
+	if r.String() != "test_value" {
+		t.Errorf("Key(EDGE) should return 'test_value', got %s", r.String())
 	}
 }
