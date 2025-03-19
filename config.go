@@ -34,7 +34,7 @@ type Config struct {
 }
 
 // getDefaultInstance menginisialisasi dan mengembalikan instance singleton
-func getDefaultInstance() (*Config, error) {
+var getDefaultInstance = func() (*Config, error) {
 	once.Do(func() {
 		defaultInstance, initErr = New()
 	})
@@ -354,7 +354,7 @@ func GetInt(key string, defaultValue ...int) (int, error) {
 	cfg, err := getDefaultInstance()
 	if err != nil {
 		if len(defaultValue) > 0 {
-			return defaultValue[0], nil
+			return defaultValue[0], err // Mengembalikan error, bukan nil
 		}
 		return 0, err
 	}
@@ -366,7 +366,7 @@ func GetInt64(key string, defaultValue ...int64) (int64, error) {
 	cfg, err := getDefaultInstance()
 	if err != nil {
 		if len(defaultValue) > 0 {
-			return defaultValue[0], nil
+			return defaultValue[0], err // Mengembalikan error, bukan nil
 		}
 		return 0, err
 	}
@@ -378,7 +378,7 @@ func GetFloat64(key string, defaultValue ...float64) (float64, error) {
 	cfg, err := getDefaultInstance()
 	if err != nil {
 		if len(defaultValue) > 0 {
-			return defaultValue[0], nil
+			return defaultValue[0], err // Mengembalikan error, bukan nil
 		}
 		return 0, err
 	}
@@ -402,7 +402,7 @@ func GetDuration(key string, defaultValue ...time.Duration) (time.Duration, erro
 	cfg, err := getDefaultInstance()
 	if err != nil {
 		if len(defaultValue) > 0 {
-			return defaultValue[0], nil
+			return defaultValue[0], err // Mengembalikan error, bukan nil
 		}
 		return 0, err
 	}
