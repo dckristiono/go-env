@@ -1,8 +1,10 @@
 # Go Env
 
-![Build Status](https://github.com/dckristiono/go-env/workflows/Go/badge.svg)
+![Go Test](https://github.com/dckristiono/go-env/workflows/Go%20Test/badge.svg)
+![Lint](https://github.com/dckristiono/go-env/workflows/Lint/badge.svg)
+[![codecov](https://codecov.io/gh/dckristiono/go-env/branch/main/graph/badge.svg)](https://codecov.io/gh/dckristiono/go-env)
 [![Go Report Card](https://goreportcard.com/badge/github.com/dckristiono/go-env)](https://goreportcard.com/report/github.com/dckristiono/go-env)
-[![GoDoc](https://godoc.org/github.com/dckristiono/go-env?status.svg)](https://godoc.org/github.com/dckristiono/go-env)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/dckristiono/go-env)](https://pkg.go.dev/github.com/dckristiono/go-env)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Go Env adalah modul Golang ringan dan fleksibel untuk mengelola konfigurasi environment berdasarkan mode aplikasi (production, staging, development). Modul ini menyediakan beberapa pendekatan yang berbeda untuk mengakses variabel environment.
@@ -31,19 +33,19 @@ go get github.com/dckristiono/go-env
 package main
 
 import (
-    "fmt"
-    "github.com/dckristiono/go-env"
+	"fmt"
+	"github.com/dckristiono/go-env"
 )
 
 func main() {
-    // Menggunakan fungsi package level sederhana
-    appName := env.Get("APP_NAME", "DefaultApp")
-    fmt.Printf("App Name: %s\n", appName)
-    
-    // Menggunakan helper tanpa error handling
-    port := env.Int("PORT", 8080)
-    debug := env.Bool("DEBUG", false)
-    fmt.Printf("Port: %d, Debug: %t\n", port, debug)
+	// Menggunakan fungsi package level sederhana
+	appName := env.Get("APP_NAME", "DefaultApp")
+	fmt.Printf("App Name: %s\n", appName)
+
+	// Menggunakan helper tanpa error handling
+	port := env.Int("PORT", 8080)
+	debug := env.Bool("DEBUG", false)
+	fmt.Printf("Port: %d, Debug: %t\n", port, debug)
 }
 ```
 
@@ -53,20 +55,20 @@ func main() {
 package main
 
 import (
-    "fmt"
-    "github.com/dckristiono/go-env"
+	"fmt"
+	"github.com/dckristiono/go-env"
 )
 
 func main() {
-    // Menggunakan Fluent API
-    dbHost := env.Key("DB_HOST").Required().String()
-    dbPort := env.Key("DB_PORT").IntDefault(5432)
-    
-    fmt.Printf("Database: %s:%d\n", dbHost, dbPort)
-    
-    // Dengan prefix
-    adminEmail := env.With(env.WithPrefix("ADMIN_")).Key("EMAIL").String()
-    fmt.Printf("Admin Email: %s\n", adminEmail)
+	// Menggunakan Fluent API
+	dbHost := env.Key("DB_HOST").Required().String()
+	dbPort := env.Key("DB_PORT").IntDefault(5432)
+
+	fmt.Printf("Database: %s:%d\n", dbHost, dbPort)
+
+	// Dengan prefix
+	adminEmail := env.With(env.WithPrefix("ADMIN_")).Key("EMAIL").String()
+	fmt.Printf("Admin Email: %s\n", adminEmail)
 }
 ```
 
@@ -76,30 +78,30 @@ func main() {
 package main
 
 import (
-    "fmt"
-    "log"
-    "time"
-    "github.com/dckristiono/go-env"
+	"fmt"
+	"log"
+	"time"
+	"github.com/dckristiono/go-env"
 )
 
 type AppConfig struct {
-    AppName       string        `env:"APP_NAME" default:"DefaultApp"`
-    Port          int           `env:"PORT" default:"8080"`
-    Debug         bool          `env:"DEBUG" default:"false"`
-    Timeout       time.Duration `env:"TIMEOUT" default:"30s"`
-    AllowedOrigins []string     `env:"ALLOWED_ORIGINS"`
+	AppName       string        `env:"APP_NAME" default:"DefaultApp"`
+	Port          int           `env:"PORT" default:"8080"`
+	Debug         bool          `env:"DEBUG" default:"false"`
+	Timeout       time.Duration `env:"TIMEOUT" default:"30s"`
+	AllowedOrigins []string     `env:"ALLOWED_ORIGINS"`
 }
 
 func main() {
-    var config AppConfig
-    
-    if err := env.Parse(&config); err != nil {
-        log.Fatalf("Failed to parse config: %v", err)
-    }
-    
-    fmt.Printf("App: %s running on port %d\n", config.AppName, config.Port)
-    fmt.Printf("Debug mode: %t, Timeout: %v\n", config.Debug, config.Timeout)
-    fmt.Printf("Allowed Origins: %v\n", config.AllowedOrigins)
+	var config AppConfig
+
+	if err := env.Parse(&config); err != nil {
+		log.Fatalf("Failed to parse config: %v", err)
+	}
+
+	fmt.Printf("App: %s running on port %d\n", config.AppName, config.Port)
+	fmt.Printf("Debug mode: %t, Timeout: %v\n", config.Debug, config.Timeout)
+	fmt.Printf("Allowed Origins: %v\n", config.AllowedOrigins)
 }
 ```
 
@@ -125,11 +127,11 @@ env.Initialize(env.WithMode("production"))
 
 // Periksa mode saat ini
 if env.IsProduction() {
-    // Production logic
+// Production logic
 } else if env.IsStaging() {
-    // Staging logic
+// Staging logic
 } else if env.IsDevelopment() {
-    // Development logic
+// Development logic
 }
 ```
 
@@ -171,10 +173,10 @@ env.Parse(&config)                       // error
 ```go
 // Fluent API dengan method chaining
 env.Key("KEY")                           // *result
-  .Required()                            // *result (validasi)
-  .Default("default")                    // *result (nilai default)
-  .String()                              // string (hasil akhir)
-  
+.Required()                            // *result (validasi)
+.Default("default")                    // *result (nilai default)
+.String()                              // string (hasil akhir)
+
 // Tipe hasil lainnya  
 env.Key("KEY").Int()                     // (int, error)
 env.Key("KEY").IntDefault(42)            // int
@@ -199,8 +201,8 @@ env.With(env.WithPrefix("APP_"))         // *Config
 
 // Menggunakan options bersama
 env.With(
-    env.WithMode("staging"),
-    env.WithPrefix("DB_"),
+env.WithMode("staging"),
+env.WithPrefix("DB_"),
 )                                        // *Config
 
 // Inisialisasi ulang instance default

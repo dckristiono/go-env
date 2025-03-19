@@ -1,33 +1,52 @@
-# Cara Merilis Versi Baru
+# Panduan Rilis
 
-Proyek ini menggunakan GitHub Actions untuk membantu proses pembuatan tag dan rilis. Ada dua workflow yang relevan dalam proses ini:
+Proyek ini menggunakan GitHub Actions dan GoReleaser untuk proses rilis otomatis setelah tag dibuat secara manual.
 
-## 1. Tag dan Release Otomatis
+## Cara Melakukan Rilis Baru
 
-Untuk membuat rilis baru:
+### 1. Membuat Tag Secara Manual
 
-1. Buka repositori di GitHub
-2. Pilih tab **Actions**
-3. Pilih workflow "Bump version and create release"
-4. Klik tombol **Run workflow**
-5. Masukkan informasi yang diminta:
-    - **Version**: Versi baru (misalnya: 1.0.1, 1.1.0, 2.0.0)
-    - **Type**: Jenis rilis (patch, minor, atau major)
-6. Klik **Run workflow**
+Untuk membuat tag versi baru:
 
-Workflow ini akan:
-- Mengupdate versi di `version.go`
-- Membuat commit perubahan versi
-- Membuat tag dengan format `v{version}` (misalnya: v1.0.1)
-- Push tag dan commit ke repositori
+```bash
+# Update versi di version.go (opsional)
+# Commit perubahan jika diperlukan
+git commit -am "Bump version to x.y.z"
 
-## 2. Pembuatan Release
+# Buat tag dengan pesan
+git tag -a vx.y.z -m "Release vx.y.z" 
 
-Setelah tag dibuat, workflow `go.yml` akan otomatis:
+# Push tag ke remote
+git push origin vx.y.z
+```
+
+Contoh:
+```bash
+git tag -a v0.1.0 -m "Initial release" 
+git push origin v0.1.0
+```
+
+### 2. Proses Rilis Otomatis
+
+Setelah tag di-push, GitHub Actions akan otomatis:
 - Mendeteksi tag baru dengan format `v*`
-- Menjalankan build dan test
-- Membuat GitHub Release yang sesuai dengan tag
-- Menghasilkan changelog secara otomatis dari commit sejak rilis terakhir
+- Menjalankan workflow `release.yml`
+- Menggunakan GoReleaser untuk membuat GitHub Release
+- Menghasilkan changelog berdasarkan commit sejak rilis terakhir
+
+## Format Commit untuk Changelog yang Baik
+
+GoReleaser menghasilkan changelog berdasarkan commit messages. Untuk changelog yang rapi, gunakan format commit conventional:
+
+- `feat: tambah fitur X` - untuk fitur baru
+- `fix: perbaiki bug Y` - untuk bug fixes
+- `refactor: refaktor fungsi Z` - untuk refactoring
+- `perf: optimalkan operasi A` - untuk peningkatan performa
+- `docs: update dokumentasi B` - untuk perubahan dokumentasi
+- `test: tambah test untuk C` - untuk penambahan test
+- `chore: update dependency D` - untuk perubahan tooling/dependencies
+
+Pesan dengan awalan `docs:`, `test:`, dan `chore:` tidak akan muncul di changelog default.
 
 ## Versioning
 
@@ -45,11 +64,9 @@ Pengguna dapat menginstall versi tertentu dengan:
 go get github.com/dckristiono/go-env@v1.0.0
 ```
 
-## Changelog
+## Konfigurasi Rilis
 
-Changelog dibuat otomatis berdasarkan commit messages. Untuk memudahkan pembacaan changelog, disarankan untuk menggunakan format commit yang baik, misalnya:
-
-- `fix: perbaikan bug X`
-- `feat: tambah fitur Y`
-- `docs: update dokumentasi Z`
-- `refactor: refactor fungsi A`
+Konfigurasi GoReleaser dapat ditemukan di file `.goreleaser.yml`. File ini mengatur:
+- Skip build binary (karena ini adalah library)
+- Format dan pengelompokan changelog
+- Footer release dengan petunjuk instalasi

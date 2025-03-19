@@ -1,0 +1,45 @@
+project_name: go-env
+
+# We skip the build for Go libraries
+builds:
+  - skip: true
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+  groups:
+    - title: 'New Features'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Code Refactoring'
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: 'Performance Improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: 'Documentation Updates'
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 4
+    - title: 'Other Changes'
+      order: 999
+
+release:
+  prerelease: auto
+  footer: |
+    ## Installation
+    ```bash
+    go get github.com/dckristiono/go-env@{{ .Tag }}
+    ```
+
+    ## Documentation
+    For detailed documentation, visit [pkg.go.dev](https://pkg.go.dev/github.com/dckristiono/go-env@{{ .Tag }})
