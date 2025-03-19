@@ -23,8 +23,8 @@ const (
 // defaultInstance adalah instance singleton dari Config yang digunakan untuk fungsi-fungsi level package
 var (
 	defaultInstance *Config
-	once            sync.Once
 	initErr         error
+	instanceMutex   sync.RWMutex
 )
 
 // Config menyimpan konfigurasi environment
@@ -33,12 +33,44 @@ type Config struct {
 	Prefix string
 }
 
-// getDefaultInstance menginisialisasi dan mengembalikan instance singleton
+// getDefaultInstance yang thread-safe
 var getDefaultInstance = func() (*Config, error) {
-	once.Do(func() {
-		defaultInstance, initErr = New()
-	})
+	// Use the mutex to check if initialization is needed
+	instanceMutex.RLock()
+	if defaultInstance != nil || initErr != nil {
+		defer instanceMutex.RUnlock()
+		return defaultInstance, initErr
+	}
+	instanceMutex.RUnlock()
+
+	// If not initialized, acquire a write lock and initialize
+	instanceMutex.Lock()
+	defer instanceMutex.Unlock()
+
+	// Check again now that we have the lock (double-checked locking pattern)
+	if defaultInstance != nil || initErr != nil {
+		return defaultInstance, initErr
+	}
+
+	// Initialize without using sync.Once
+	defaultInstance, initErr = New()
 	return defaultInstance, initErr
+}
+
+// Initialize yang thread-safe
+func Initialize(options ...ConfigOption) error {
+	config, err := New(options...)
+	if err != nil {
+		return err
+	}
+
+	// Use exclusive lock when modifying shared variables
+	instanceMutex.Lock()
+	defaultInstance = config
+	initErr = nil
+	instanceMutex.Unlock()
+
+	return nil
 }
 
 // New membuat instance Config baru dengan opsi yang diberikan
@@ -311,19 +343,6 @@ func (c *Config) IsDevelopment() bool {
 // -----------------------------
 // Fungsi-fungsi level package
 // -----------------------------
-
-// Initialize secara eksplisit menginisialisasi singleton dengan opsi
-func Initialize(options ...ConfigOption) error {
-	config, err := New(options...)
-	if err != nil {
-		return err
-	}
-
-	defaultInstance = config
-	initErr = nil
-
-	return nil
-}
 
 // With mengembalikan Config dengan opsi yang ditentukan
 func With(options ...ConfigOption) *Config {

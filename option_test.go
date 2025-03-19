@@ -209,18 +209,18 @@ func TestInitializeWithMultipleOptionsExtended(t *testing.T) {
 	// Save original state
 	origDefaultInstance := defaultInstance
 	origInitErr := initErr
-	origOnce := once
+	// TIDAK menyimpan once
 
-	// Reset for testing
+	// Reset nilai untuk pengujian
 	defaultInstance = nil
 	initErr = nil
-	once = sync.Once{}
+	//once = sync.Once{} // Ini aman karena kita membuat instance baru, bukan menyalin
 
-	// Restore after test
+	// Restore nilai di defer
 	defer func() {
 		defaultInstance = origDefaultInstance
 		initErr = origInitErr
-		once = origOnce
+		// TIDAK mengembalikan nilai once
 	}()
 
 	// Create temp env file
@@ -230,7 +230,12 @@ func TestInitializeWithMultipleOptionsExtended(t *testing.T) {
 		t.Skipf("Failed to get current dir: %v", err)
 		return
 	}
-	defer os.Chdir(oldDir)
+
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Errorf("Failed to restore original directory: %v", err)
+		}
+	}()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Skipf("Failed to change to temp dir: %v", err)
@@ -267,7 +272,7 @@ func TestInitializeWithMultipleOptionsExtended(t *testing.T) {
 	// Reset singleton
 	defaultInstance = nil
 	initErr = nil
-	once = sync.Once{}
+	//once = sync.Once{}
 
 	// Test with multiple options
 	options := []ConfigOption{
@@ -341,21 +346,23 @@ func TestWithInitializeRace(t *testing.T) {
 		t.Skip("Skipping race condition test in short mode")
 	}
 
-	// Save original state
+	instanceMutex.RLock()
 	origDefaultInstance := defaultInstance
 	origInitErr := initErr
-	origOnce := once
+	instanceMutex.RUnlock()
 
-	// Reset for testing
+	instanceMutex.Lock()
 	defaultInstance = nil
 	initErr = nil
-	once = sync.Once{}
+	//once = sync.Once{}
+	instanceMutex.Unlock()
 
-	// Restore after test
+	// Restore dengan aman setelah selesai
 	defer func() {
+		instanceMutex.Lock()
 		defaultInstance = origDefaultInstance
 		initErr = origInitErr
-		once = origOnce
+		instanceMutex.Unlock()
 	}()
 
 	// Create temp env file
@@ -365,7 +372,11 @@ func TestWithInitializeRace(t *testing.T) {
 		t.Skipf("Failed to get current dir: %v", err)
 		return
 	}
-	defer os.Chdir(oldDir)
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Errorf("Failed to restore original directory: %v", err)
+		}
+	}()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Skipf("Failed to change to temp dir: %v", err)

@@ -538,7 +538,7 @@ func TestParseBoolVariations(t *testing.T) {
 
 	// Create struct fields
 	fields := make([]reflect.StructField, 0, len(boolCases))
-	for k, _ := range boolCases {
+	for k := range boolCases {
 		fields = append(fields, reflect.StructField{
 			Name: k,
 			Type: reflect.TypeOf(false),
