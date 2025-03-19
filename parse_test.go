@@ -1,6 +1,7 @@
 package env
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -568,4 +569,29 @@ func TestParseBoolVariations(t *testing.T) {
 				fieldName, expectedValue, boolCases[fieldName].value, fieldValue)
 		}
 	}
+}
+
+// TestParseExhaustive tests Parse method for comprehensive coverage
+func TestParseExhaustive(t *testing.T) {
+	// Test edge case where getDefaultInstance returns error
+	origGetDefaultInstance := getDefaultInstance
+	mockErr := fmt.Errorf("mock error")
+
+	getDefaultInstance = func() (*Config, error) {
+		return nil, mockErr
+	}
+
+	type TestConfig struct {
+		Field string `env:"TEST_FIELD"`
+	}
+
+	var config TestConfig
+	err := Parse(&config)
+
+	if err != mockErr {
+		t.Errorf("Parse() with getDefaultInstance error expected %v, got %v", mockErr, err)
+	}
+
+	// Restore original function
+	getDefaultInstance = origGetDefaultInstance
 }

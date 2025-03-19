@@ -698,3 +698,41 @@ func TestBoolParsingVariations(t *testing.T) {
 		})
 	}
 }
+
+func TestIntDefaultVariations(t *testing.T) {
+	// Create result dengan value valid
+	r := &result{
+		config: &Config{},
+		key:    "TEST_KEY",
+		value:  "42",
+		err:    nil,
+	}
+
+	// Test dengan value valid
+	val := r.IntDefault(100)
+	if val != 42 {
+		t.Errorf("IntDefault() with valid value expected 42, got %d", val)
+	}
+
+	// Test dengan error
+	r.err = fmt.Errorf("some error")
+	val = r.IntDefault(100)
+	if val != 100 {
+		t.Errorf("IntDefault() with error expected 100, got %d", val)
+	}
+
+	// Reset error, set invalid value
+	r.err = nil
+	r.value = "not_an_int"
+	val = r.IntDefault(100)
+	if val != 100 {
+		t.Errorf("IntDefault() with invalid value expected 100, got %d", val)
+	}
+
+	// Test dengan empty value
+	r.value = ""
+	val = r.IntDefault(100)
+	if val != 100 {
+		t.Errorf("IntDefault() with empty value expected 100, got %d", val)
+	}
+}
