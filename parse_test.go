@@ -15,7 +15,7 @@ type TestConfig struct {
 	AllowedOrigins []string          `env:"TEST_ALLOWED_ORIGINS"`
 	Features       map[string]string `env:"TEST_FEATURES"`
 	NoTagField     string
-	privateField   string
+	privateField   string //nolint:unused // Ini field private untuk menguji bahwa parser mengabaikan field private
 }
 
 func TestParse(t *testing.T) {
